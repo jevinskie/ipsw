@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -46,12 +47,12 @@ type GithubContentsResponse struct {
 }
 
 type OsFileSource struct {
-	Type      string   `json:"type"`
-	DeviceMap []string `json:"deviceMap"`
-	Links     []struct {
-		URL       string `json:"url"`
-		Preferred bool   `json:"preferred"`
-		Active    bool   `json:"active"`
+	Type              string             `json:"type"`
+	PrerequisiteBuild PrerequisiteBuilds `json:"prerequisiteBuild,omitempty"`
+	DeviceMap         []string           `json:"deviceMap"`
+	Links             []struct {
+		URL    string `json:"url"`
+		Active bool   `json:"active"`
 	} `json:"links"`
 	Hashes struct {
 		Sha2256 string `json:"sha2-256"`
@@ -64,7 +65,7 @@ type ReleasedDate time.Time
 
 func (r *ReleasedDate) UnmarshalJSON(b []byte) error {
 	s := strings.Trim(string(b), "\"")
-	if s == "null" {
+	if s == "null" || s == "" {
 		return nil
 	}
 	t, err := time.Parse("2006-01-02", s)
@@ -80,6 +81,24 @@ func (r ReleasedDate) MarshalJSON() ([]byte, error) {
 func (r ReleasedDate) Format(s string) string {
 	t := time.Time(r)
 	return t.Format(s)
+}
+
+type PrerequisiteBuilds struct {
+	Builds []string
+}
+
+func (p *PrerequisiteBuilds) UnmarshalJSON(b []byte) error {
+	var str string
+	if err := json.Unmarshal(b, &str); err == nil {
+		p.Builds = []string{str}
+		return nil
+	}
+	var slice []string
+	if err := json.Unmarshal(b, &slice); err == nil {
+		p.Builds = slice
+		return nil
+	}
+	return fmt.Errorf("could not unmarshal PrerequisiteBuilds as string or []string")
 }
 
 // AppleDbOsFiles is an AppleDB osFiles object
@@ -152,11 +171,37 @@ func (fs OsFiles) Query(query *ADBQuery) []OsFileSource {
 		if len(query.Device) > 0 {
 			for _, source := range f.Sources {
 				if slices.Contains(source.DeviceMap, query.Device) {
-					sources = append(sources, source)
+					if len(query.Type) > 0 && source.Type == query.Type {
+						sources = append(sources, source)
+					}
 				}
 			}
 		} else {
-			sources = append(sources, f.Sources...)
+			for _, source := range f.Sources {
+				if len(query.Type) > 0 && source.Type == query.Type {
+					sources = append(sources, source)
+				}
+			}
+		}
+	}
+
+	if query.Type == "ota" {
+		if len(query.PrerequisiteBuild) > 0 {
+			var tmpSources []OsFileSource
+			for _, source := range sources {
+				if slices.Contains(source.PrerequisiteBuild.Builds, query.PrerequisiteBuild) {
+					tmpSources = append(tmpSources, source)
+				}
+			}
+			sources = tmpSources
+		} else {
+			var tmpSources []OsFileSource
+			for _, source := range sources {
+				if len(source.PrerequisiteBuild.Builds) == 0 {
+					tmpSources = append(tmpSources, source)
+				}
+			}
+			sources = tmpSources
 		}
 	}
 
@@ -164,16 +209,18 @@ func (fs OsFiles) Query(query *ADBQuery) []OsFileSource {
 }
 
 type ADBQuery struct {
-	OSes      []string
-	Version   string
-	Build     string
-	Device    string
-	IsBeta    bool
-	Latest    bool
-	Proxy     string
-	Insecure  bool
-	APIToken  string
-	ConfigDir string
+	OSes              []string
+	Type              string
+	Version           string
+	Build             string
+	PrerequisiteBuild string
+	Device            string
+	IsBeta            bool
+	Latest            bool
+	Proxy             string
+	Insecure          bool
+	APIToken          string
+	ConfigDir         string
 }
 
 func LocalAppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
@@ -205,15 +252,17 @@ func LocalAppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
 	}
 
 	for _, folder := range folders {
-		build, version, found := strings.Cut(filepath.Base(folder), " - ")
-		if !found {
-			continue
-		}
-		if len(q.Version) > 0 && !strings.HasPrefix(q.Version, strings.TrimSuffix(version, "x")) {
-			continue
-		}
-		if len(q.Build) > 0 && !strings.HasPrefix(q.Build, strings.TrimSuffix(build, "x")) {
-			continue
+		if !strings.Contains(folder, "Rapid Security Responses") {
+			build, version, found := strings.Cut(filepath.Base(folder), " - ")
+			if !found {
+				continue
+			}
+			if len(q.Version) > 0 && !strings.HasPrefix(q.Version, strings.TrimSuffix(version, "x")) {
+				continue
+			}
+			if len(q.Build) > 0 && !strings.HasPrefix(q.Build, strings.TrimSuffix(build, "x")) {
+				continue
+			}
 		}
 		if err := filepath.Walk(folder, func(path string, f os.FileInfo, err error) error {
 			var osfile AppleDbOsFile
@@ -226,6 +275,13 @@ func LocalAppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
 					log.Errorf("failed to unmarshal osfile for version %s (%s): %v", osfile.Version, osfile.Build, err)
 					return nil
 				}
+
+				if strings.Contains(path, "Rapid Security Responses") {
+					for i := range osfile.Sources {
+						osfile.Sources[i].Type = "rsr"
+					}
+				}
+
 				osfiles = append(osfiles, osfile)
 			}
 			return err
@@ -252,6 +308,24 @@ func AppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
 		}
 
 		for _, folder := range folders {
+			if strings.Contains(folder.Path, "Rapid Security Responses") {
+				for _, file := range folders {
+					of, err := getOsFiles(file.Path, q.Proxy, q.APIToken, q.Insecure)
+					if err != nil {
+						log.WithError(err).Errorf("failed to download %s", path.Base(file.DownloadURL))
+						continue
+					}
+					if strings.Contains(file.Path, "Rapid Security Responses") {
+						for i := range of.Sources {
+							of.Sources[i].Type = "rsr"
+						}
+					}
+					osfiles = append(osfiles, *of)
+				}
+
+				return osfiles.Query(q), nil
+			}
+
 			build, version, found := strings.Cut(folder.Name, " - ")
 			if !found {
 				continue
@@ -267,15 +341,22 @@ func AppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
 			if err != nil {
 				return nil, err
 			}
+
 			files, err := queryGithubAPI(qurl, q.Proxy, q.APIToken, q.Insecure)
 			if err != nil {
 				return nil, err
 			}
 
 			for _, file := range files {
-				of, err := getOsFiles(file.DownloadURL, q.Proxy, q.APIToken, q.Insecure)
+				of, err := getOsFiles(file.Path, q.Proxy, q.APIToken, q.Insecure)
 				if err != nil {
-					return nil, err
+					log.WithError(err).Errorf("failed to download %s", path.Base(file.DownloadURL))
+					continue
+				}
+				if strings.Contains(file.Path, "Rapid Security Responses") {
+					for i := range of.Sources {
+						of.Sources[i].Type = "rsr"
+					}
 				}
 				osfiles = append(osfiles, *of)
 			}
@@ -323,7 +404,7 @@ func queryGithubAPI(path, proxy, api string, insecure bool) ([]GithubContentsRes
 	res.Body.Close()
 
 	if err := json.Unmarshal(body, &contents); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal []GithubContentsResponse JSON: %w", err)
 	}
 
 	return contents, nil
@@ -332,11 +413,12 @@ func queryGithubAPI(path, proxy, api string, insecure bool) ([]GithubContentsRes
 func getOsFiles(path, proxy, api string, insecure bool) (*AppleDbOsFile, error) {
 	var osfile AppleDbOsFile
 
-	req, err := http.NewRequest("GET", path, nil)
+	req, err := http.NewRequest("GET", ApiContentsURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create http GET request: %v", err)
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/vnd.github.raw")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Add("User-Agent", utils.RandomAgent())
 	if len(api) > 0 {
 		req.Header.Add("Authorization", "token "+api)
@@ -366,7 +448,7 @@ func getOsFiles(path, proxy, api string, insecure bool) (*AppleDbOsFile, error) 
 	res.Body.Close()
 
 	if err := json.Unmarshal(body, &osfile); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal AppleDbOsFile JSON: %w", err)
 	}
 
 	return &osfile, nil

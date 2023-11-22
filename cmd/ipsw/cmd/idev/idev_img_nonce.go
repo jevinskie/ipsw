@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apex/log"
@@ -110,13 +111,32 @@ var nonceCmd = &cobra.Command{
 			log.Errorf("failed to get personalization identifiers: %v ('personalization' might not be supported on this device)", err)
 		}
 
+		personalID["ApNonce"] = nonce
+
+		delete(personalID, "CertificateProductionStatus")
+		delete(personalID, "EffectiveProductionStatusAp")
+		delete(personalID, "SecurityDomain")
+		delete(personalID, "CertificateSecurityMode")
+		delete(personalID, "EffectiveSecurityModeAp")
+
 		if asQrCode {
 			// Create the barcode
-			qrCodeStr := fmt.Sprintf("ApBoardID=%d,ApChipID=%d,ApECID=%d,ApNonce=%s", personalID["BoardId"], personalID["ChipID"], personalID["UniqueChipID"], nonce)
+			var parts []string
+			var qrCodeStr string
+			for k, v := range personalID {
+				switch t := v.(type) {
+				case uint64:
+					parts = append(parts, fmt.Sprintf("%s=%d", k, t))
+				case string:
+					parts = append(parts, fmt.Sprintf("%s=%s", k, t))
+				}
+			}
+			qrCodeStr = strings.Join(parts, ",")
 			if len(email) > 0 {
 				qrCodeStr = fmt.Sprintf("mailto:%s?subject=%s&body=%s", email, emailSubject, qrCodeStr)
 			} else if len(qrURL) > 0 {
-				u, err := url.Parse(fmt.Sprintf("%s?ApBoardID=%d&ApChipID=%d&ApECID=%d&ApNonce=%s", qrURL, personalID["BoardId"], personalID["ChipID"], personalID["UniqueChipID"], nonce))
+				qrCodeStr = strings.Join(parts, "&")
+				u, err := url.Parse(fmt.Sprintf("%s?%s", qrURL, qrCodeStr))
 				if err != nil {
 					return fmt.Errorf("failed to parse URL: %w", err)
 				}
@@ -148,7 +168,7 @@ var nonceCmd = &cobra.Command{
 				return os.WriteFile(fname, dat.Bytes(), 0644)
 			}
 
-			log.Warn("Displaying QR code in terminal (supported in iTerm2, otherwise supply --output flag)")
+			log.Warn("Displaying QR code in terminal (supported in iTerm2 and VSCode, otherwise supply --output flag)")
 			println()
 			return utils.DisplayImageInTerminal(bytes.NewReader(dat.Bytes()), dat.Len(), qrcSize, qrcSize)
 		}
@@ -183,17 +203,7 @@ var nonceCmd = &cobra.Command{
 						return fmt.Errorf("failed to marshal JSON: %w", err)
 					}
 				} else {
-					out, err = json.MarshalIndent(&struct {
-						ApBoardID int    `json:"board_id,omitempty"`
-						ApChipID  int    `json:"chip_id,omitempty"`
-						ApECID    int    `json:"ecid,omitempty"`
-						ApNonce   string `json:"nonce,omitempty"`
-					}{
-						ApBoardID: personalID["BoardId"].(int),
-						ApChipID:  personalID["ChipID"].(int),
-						ApECID:    personalID["UniqueChipID"].(int),
-						ApNonce:   nonce,
-					}, "", "  ")
+					out, err = json.MarshalIndent(personalID, "", "  ")
 					if err != nil {
 						return fmt.Errorf("failed to marshal JSON: %w", err)
 					}
