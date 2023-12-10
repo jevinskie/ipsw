@@ -29,7 +29,8 @@ import (
 	"path/filepath"
 
 	"github.com/apex/log"
-	"github.com/blacktop/ipsw/pkg/sandbox"
+	"github.com/blacktop/ipsw/pkg/sandbox/compile"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -53,6 +54,7 @@ var cmplCmd = &cobra.Command{
 		if viper.GetBool("verbose") {
 			log.SetLevel(log.DebugLevel)
 		}
+		color.NoColor = viper.GetBool("no-color")
 
 		output, _ := cmd.Flags().GetString("output")
 
@@ -64,7 +66,7 @@ var cmplCmd = &cobra.Command{
 		}
 		defer f.Close()
 
-		profile, err := sandbox.Compile(f)
+		profile, err := compile.Do(f)
 		if err != nil {
 			return fmt.Errorf("failed to compile profile %s: %w", sbProfile, err)
 		}

@@ -47,6 +47,7 @@ manpages/
 *.download
 checksums.txt.sha1
 mg.*
+btm.go
 
 # Docs
 public

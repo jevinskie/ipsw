@@ -27,7 +27,7 @@ Download and Parse IPSWs (and SO much more)
 * [ipsw download](/docs/cli/ipsw/download)	 - Download Apple Firmware files (and more)
 * [ipsw dtree](/docs/cli/ipsw/dtree)	 - Parse DeviceTree
 * [ipsw dyld](/docs/cli/ipsw/dyld)	 - Parse dyld_shared_cache
-* [ipsw ent](/docs/cli/ipsw/ent)	 - Search IPSW filesystem DMG for MachOs with a given entitlement
+* [ipsw ent](/docs/cli/ipsw/ent)	 - Search IPSW filesystem DMG or Folder for MachOs with a given entitlement
 * [ipsw extract](/docs/cli/ipsw/extract)	 - Extract kernelcache, dyld_shared_cache or DeviceTree from IPSW/OTA
 * [ipsw iboot](/docs/cli/ipsw/iboot)	 - Dump firmwares
 * [ipsw idev](/docs/cli/ipsw/idev)	 - USB connected device commands

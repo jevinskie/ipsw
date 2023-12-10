@@ -36,6 +36,7 @@ import (
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/apex/log"
 	"github.com/caarlos0/ctrlc"
+	"github.com/fatih/color"
 
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/spf13/cobra"
@@ -45,6 +46,7 @@ import (
 func init() {
 	devCmd.Flags().StringArrayP("watch", "w", []string{}, "Developer portal group pattern to watch (i.e. '^iOS.*beta$')")
 	devCmd.Flags().Bool("os", false, "Download '*OS' OSes/Apps")
+	devCmd.Flags().Bool("profile", false, "Download Logging Profiles")
 	devCmd.Flags().Bool("more", false, "Download 'More' OSes/Apps")
 	devCmd.Flags().IntP("page", "p", 20, "Page size for file lists")
 	devCmd.Flags().Bool("sms", false, "Prefer SMS Two-factor authentication")
@@ -56,6 +58,7 @@ func init() {
 	devCmd.Flags().StringP("vault-password", "k", "", "Password to unlock credential vault (only for file vaults)")
 	viper.BindPFlag("download.dev.watch", devCmd.Flags().Lookup("watch"))
 	viper.BindPFlag("download.dev.os", devCmd.Flags().Lookup("os"))
+	viper.BindPFlag("download.dev.profile", devCmd.Flags().Lookup("profile"))
 	viper.BindPFlag("download.dev.more", devCmd.Flags().Lookup("more"))
 	viper.BindPFlag("download.dev.page", devCmd.Flags().Lookup("page"))
 	viper.BindPFlag("download.dev.sms", devCmd.Flags().Lookup("sms"))
@@ -67,6 +70,7 @@ func init() {
 	viper.BindPFlag("download.dev.vault-password", devCmd.Flags().Lookup("vault-password"))
 	devCmd.Flags().MarkHidden("kdk")
 	devCmd.MarkFlagDirname("output")
+	devCmd.MarkFlagsMutuallyExclusive("os", "profile", "more", "kdk")
 	devCmd.SetHelpFunc(func(c *cobra.Command, s []string) {
 		DownloadCmd.PersistentFlags().MarkHidden("white-list")
 		DownloadCmd.PersistentFlags().MarkHidden("black-list")
@@ -91,6 +95,7 @@ var devCmd = &cobra.Command{
 		if viper.GetBool("verbose") {
 			log.SetLevel(log.DebugLevel)
 		}
+		color.NoColor = viper.GetBool("no-color")
 
 		viper.BindPFlag("download.proxy", cmd.Flags().Lookup("proxy"))
 		viper.BindPFlag("download.insecure", cmd.Flags().Lookup("insecure"))
@@ -156,12 +161,14 @@ var devCmd = &cobra.Command{
 		dlType := ""
 		if viper.GetBool("download.dev.os") {
 			dlType = "os"
+		} else if viper.GetBool("download.dev.profile") {
+			dlType = "profile"
 		} else if viper.GetBool("download.dev.more") {
 			dlType = "more"
 		} else {
 			prompt := &survey.Select{
 				Message: "Choose a download type:",
-				Options: []string{"OSes (iOS, macOS, tvOS...)", "More (XCode, KDKs...)"},
+				Options: []string{"OSes (iOS, macOS, tvOS...)", "Profiles (Logging)", "More (XCode, KDKs...)"},
 			}
 			if err := survey.AskOne(prompt, &dlType); err != nil {
 				if err == terminal.InterruptErr {
@@ -170,10 +177,12 @@ var devCmd = &cobra.Command{
 				}
 				return err
 			}
-			if strings.Contains(dlType, "More") {
-				dlType = "more"
-			} else {
+			if strings.HasPrefix(dlType, "OSes") {
 				dlType = "os"
+			} else if strings.HasPrefix(dlType, "Profiles") {
+				dlType = "profile"
+			} else if strings.HasPrefix(dlType, "More") {
+				dlType = "more"
 			}
 		}
 
