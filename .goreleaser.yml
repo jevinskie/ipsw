@@ -788,7 +788,7 @@ winget:
       branch: "ipsw-{{.Version}}"
       pull_request:
         enabled: true
-        draft: true
+        draft: false
         base:
           owner: microsoft
           name: winget-pkgs
@@ -806,7 +806,7 @@ winget:
       branch: "ipswd-{{.Version}}"
       pull_request:
         enabled: true
-        draft: true
+        draft: false
         base:
           owner: microsoft
           name: winget-pkgs

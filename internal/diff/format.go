@@ -26,19 +26,43 @@ const diffMarkdownTemplate = `
 	- [Kernel](#kernel)
 		- [Version](#version)
 		- [Kexts](#kexts)
-{{- if .Ents }}
-	- [Entitlements](#entitlements)
+{{- if .Kexts.New }}
+			- [🆕 NEW ({{ len .Kexts.New }})](#-new)
+{{- end }}
+{{- if .Kexts.Removed }}
+			- [❌ Removed ({{ len .Kexts.Removed }})](#-removed)
+{{- end }}
+{{- if .Kexts.Updated }}
+			- [⬆️ Updated ({{ len .Kexts.Updated }})](#️-updated)
 {{- end }}		
+	- [Machos](#machos)
+{{- if .Machos }}	
+{{- if .Machos.New }}
+		- [🆕 NEW ({{ len .Machos.New }})](#-new-1)
+{{- end }}
+{{- if .Machos.Removed }}
+		- [❌ Removed ({{ len .Machos.Removed }})](#-removed-1)
+{{- end }}
+{{- if .Machos.Updated }}
+		- [⬆️ Updated ({{ len .Machos.Updated }})](#️-updated-1)
+{{- end }}
+{{- end }}
+{{- if .Ents }}
+		- [Entitlements](#entitlements)
+{{- end }}
 	- [DSC](#dsc)
 		- [WebKit](#webkit)
+		- [Dylibs](#dylibs)
+{{- if .Dylibs }}			
 {{- if .Dylibs.New }}
-		- [🆕 dylibs](#🆕-new-dylibs)
+			- [🆕 NEW ({{ len .Dylibs.New }})](#-new-2)
 {{- end }}
 {{- if .Dylibs.Removed }}
-		- [❌ dylibs](#❌-removed-dylibs)
+			- [❌ Removed ({{ len .Dylibs.Removed }})](#️-removed-2)
 {{- end }}
 {{- if .Dylibs.Updated }}
-		- [⬆️ dylibs](#⬆️-updated-dylibs)
+			- [⬆️ Updated ({{ len .Dylibs.Updated }})](#️-updated-2)
+{{- end }}
 {{- end }}
 
 
@@ -59,8 +83,31 @@ const diffMarkdownTemplate = `
 | {{ .New.Version }} *({{ .New.Build }})* | {{ .New.Kernel.Version.KernelVersion.Darwin }} | {{ .New.Kernel.Version.KernelVersion.XNU }} | {{ .New.Kernel.Version.KernelVersion.Date.Format "Mon, 02Jan2006 15:04:05 MST" }} |
 
 ### Kexts
+{{ if .Kexts.New }}
+### 🆕 NEW
+{{ range .Kexts.New }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Kexts.Removed }}
+### ❌ Removed
+{{ range .Kexts.Removed }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Kexts.Updated }}
+### ⬆️ Updated
+<details>
+  <summary><i>View Updated</i></summary>
 
-{{ .Kexts | noescape }}
+{{ range $key, $value := .Kexts.Updated }}
+#### {{ $key | base }}
+> {{ $key | code }}
+{{ $value | noescape }}
+{{ end }}
+
+</details>
+{{ end -}}
 
 {{ if .KDKs }}
 ## KDKs
@@ -70,14 +117,47 @@ const diffMarkdownTemplate = `
 {{ .KDKs | noescape }}
 {{end -}}
 
-## Entitlements
+{{- if .Machos }}
+## MachOs
+{{ if .Machos.New }}
+### 🆕 NEW
+{{ range .Machos.New }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Machos.Removed }}
+### ❌ Removed
+{{ range .Machos.Removed }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Machos.Updated }}
+### ⬆️ Updated
+<details>
+  <summary><i>View Updated</i></summary>
 
-{{ .Ents | noescape }}
+{{ range $key, $value := .Machos.Updated }}
+#### {{ $key | base }}
+> {{ $key | code }}
+{{ $value | noescape }}
+{{ end }}
 
+</details>
+{{ end -}}
+{{ end -}}
+{{ if .Ents }}
+### Entitlements
+<details>
+  <summary><i>View Entitlements</i></summary>
+
+  {{ .Ents | noescape }}
+
+</details>
+{{ end -}}
 {{ if .Launchd }}
 ## launchd Config
 {{ .Launchd | noescape }}
-{{end -}}
+{{ end }}
 
 ## DSC
 
@@ -88,14 +168,33 @@ const diffMarkdownTemplate = `
 | {{ .Old.Version }} *({{ .Old.Build }})* | {{ .Old.Webkit }} |
 | {{ .New.Version }} *({{ .New.Build }})* | {{ .New.Webkit }} |
 
+{{- if .Dylibs }}
+### Dylibs
 {{ if .Dylibs.New }}
-{{ .Dylibs.New }}
+#### 🆕 NEW
+{{ range .Dylibs.New }}
+- {{ . | code }}
+{{ end }}
 {{ end -}}
 {{- if .Dylibs.Removed }}
-{{ .Dylibs.Removed }}
+#### ❌ Removed
+{{ range .Dylibs.Removed }}
+- {{ . | code }}
+{{ end }}
 {{ end -}}
 {{- if .Dylibs.Updated }}
-{{ .Dylibs.Updated | noescape }}
+#### ⬆️ Updated
+<details>
+  <summary><i>View Updated</i></summary>
+
+{{ range $key, $value := .Dylibs.Updated }}
+##### {{ $key | base }}
+> {{ $key | code }}
+{{ $value | noescape }}
+{{ end }}
+
+</details>
+{{ end -}}
 {{ end -}}
 `
 

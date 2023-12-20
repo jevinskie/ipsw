@@ -8,10 +8,10 @@ require (
 	github.com/PuerkitoBio/goquery v1.8.1
 	github.com/alecthomas/chroma/v2 v2.12.0
 	github.com/apex/log v1.9.0
-	github.com/aymanbagabas/go-udiff v0.1.3
+	github.com/aymanbagabas/go-udiff v0.2.0
 	github.com/blacktop/arm64-cgo v1.0.57
 	github.com/blacktop/go-dwarf v1.0.9
-	github.com/blacktop/go-macho v1.1.182
+	github.com/blacktop/go-macho v1.1.188
 	github.com/blacktop/go-plist v1.0.2
 	github.com/blacktop/lzfse-cgo v1.1.19
 	github.com/blacktop/lzss v0.1.1
@@ -35,7 +35,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/gomarkdown/markdown v0.0.0-20231115200524-a660076da3fd
 	github.com/google/gousb v1.1.2
-	github.com/google/uuid v1.4.0
+	github.com/google/uuid v1.5.0
 	github.com/hashicorp/go-version v1.6.0
 	github.com/invopop/jsonschema v0.12.0
 	github.com/mitchellh/mapstructure v1.5.0
@@ -46,13 +46,13 @@ require (
 	github.com/shurcooL/githubv4 v0.0.0-20231126234147-1cffa1f02456
 	github.com/spf13/cast v1.6.0
 	github.com/spf13/cobra v1.8.0
-	github.com/spf13/viper v1.18.1
+	github.com/spf13/viper v1.18.2
 	github.com/ulikunitz/xz v0.5.11
 	github.com/unicorn-engine/unicorn v0.0.0-20230617215146-d4b92485b1a2
 	github.com/vbauerster/mpb/v7 v7.5.3
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8
-	golang.org/x/crypto v0.16.0
-	golang.org/x/exp v0.0.0-20231206192017-f3f8817b8deb
+	golang.org/x/crypto v0.17.0
+	golang.org/x/exp v0.0.0-20231219180239-dc181d75b848
 	golang.org/x/net v0.19.0
 	golang.org/x/oauth2 v0.15.0
 	golang.org/x/sync v0.5.0

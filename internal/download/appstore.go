@@ -43,11 +43,12 @@ const (
 	// AppStoreSearchLimit is the maximum number of results returned by the App Store search API
 	AppStoreSearchLimit = 200
 
-	ErrLoginRequires2fa             = "MZFinance.BadLogin.Configurator_message"
-	FailureTypeInvalidCredentials   = "-5000"
-	FailureTypeUnknownError         = "5002"
-	FailureTypePasswordTokenExpired = "2034"
-	FailureTypeLicenseNotFound      = "9610"
+	ErrLoginRequires2fa               = "MZFinance.BadLogin.Configurator_message"
+	FailureTypeInvalidCredentials     = "-5000"
+	FailureTypeUnknownError           = "5002"
+	FailureTypePasswordTokenExpired   = "2034"
+	FailureTypeLicenseNotFound        = "9610"
+	FailureTypeTemporarilyUnavailable = "2059"
 )
 
 type AppStoreConfig struct {
@@ -437,11 +438,7 @@ func (as *AppStore) signIn(username, password, code string, attempt int) error {
 	as.dsid = login.DsPersonID
 	as.token = login.PasswordToken
 
-	if err := as.storeSession(login); err != nil {
-		return err
-	}
-
-	return nil
+	return as.storeSession(login)
 }
 
 func (as *AppStore) storeSession(resp loginResponse) error {
@@ -497,6 +494,10 @@ func (as *AppStore) loadSession() error {
 	as.username = auth.Credentials.Username
 	as.dsid = auth.Credentials.DsPersonID
 	as.token = auth.Credentials.PasswordToken
+
+	if as.dsid == "" || as.token == "" {
+		return fmt.Errorf("vault is missing required credential data")
+	}
 
 	as.Client.Jar.SetCookies(&url.URL{Scheme: "https", Host: "p25-buy.itunes.apple.com"}, auth.AppStoreSession.Cookies)
 
@@ -732,7 +733,7 @@ func (as *AppStore) Download(bundleID, output string) error {
 	req.URL.RawQuery = q.Encode()
 
 	req.Header.Add("User-Agent", userAgent)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/x-apple-plist")
 	req.Header.Set("iCloud-DSID", as.dsid)
 	req.Header.Set("X-Dsid", as.dsid)
 

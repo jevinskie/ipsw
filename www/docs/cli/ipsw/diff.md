@@ -20,6 +20,7 @@ ipsw diff <IPSW> <IPSW> [flags]
   -h, --help              help for diff
       --html              Save diff as HTML file
   -k, --kdk stringArray   Path to KDKs to diff
+      --launchd           Diff launchd configs
   -o, --output string     Folder to save diff output
   -t, --title string      Title of the diff
 ```
@@ -29,6 +30,7 @@ ipsw diff <IPSW> <IPSW> [flags]
 ```
       --color           colorize output
       --config string   config file (default is $HOME/.config/ipsw/config.yaml)
+      --no-color        disable colorize output
   -V, --verbose         verbose output
 ```
 
