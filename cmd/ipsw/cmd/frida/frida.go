@@ -1,7 +1,7 @@
 //go:build darwin && frida
 
 /*
-Copyright © 2018-2023 blacktop
+Copyright © 2018-2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const fridaVersion = "16.1.8"
+const fridaVersion = "16.1.10"
 
 func init() {
 	FridaCmd.PersistentFlags().StringP("udid", "u", "", "Device UniqueDeviceID to connect to")
