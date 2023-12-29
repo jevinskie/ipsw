@@ -75,7 +75,7 @@ var MachoCmd = &cobra.Command{
 	Use:     "macho <DSC> <DYLIB>",
 	Aliases: []string{"m"},
 	Short:   "Parse an incache dylib file",
-	Args:    cobra.ExactArgs(2),
+	Args:    cobra.MinimumNArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) == 1 {
 			return getImages(args[0]), cobra.ShellCompDirectiveDefault
