@@ -35,5 +35,5 @@ ipsw ota [flags]
 * [ipsw ota extract](/docs/cli/ipsw/ota/extract)	 - Extract OTA payload files
 * [ipsw ota info](/docs/cli/ipsw/ota/info)	 - Display OTA metadata
 * [ipsw ota ls](/docs/cli/ipsw/ota/ls)	 - List OTA files
-* [ipsw ota patch](/docs/cli/ipsw/ota/patch)	 - Patch cryptex files
+* [ipsw ota patch](/docs/cli/ipsw/ota/patch)	 - Patch OTAs
 

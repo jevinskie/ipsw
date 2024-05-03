@@ -2,6 +2,7 @@ package diff
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -25,6 +26,7 @@ const diffMarkdownTemplate = `
 	- [IPSWs](#ipsws)
 	- [Kernel](#kernel)
 		- [Version](#version)
+{{- if .Kexts }}
 		- [Kexts](#kexts)
 {{- if .Kexts.New }}
 			- [🆕 NEW ({{ len .Kexts.New }})](#-new)
@@ -34,9 +36,10 @@ const diffMarkdownTemplate = `
 {{- end }}
 {{- if .Kexts.Updated }}
 			- [⬆️ Updated ({{ len .Kexts.Updated }})](#️-updated)
-{{- end }}		
+{{- end }}
+{{- end }}
 	- [Machos](#machos)
-{{- if .Machos }}	
+{{- if .Machos }}
 {{- if .Machos.New }}
 		- [🆕 NEW ({{ len .Machos.New }})](#-new-1)
 {{- end }}
@@ -48,20 +51,20 @@ const diffMarkdownTemplate = `
 {{- end }}
 {{- end }}
 {{- if .Ents }}
-		- [Entitlements](#entitlements)
+		- [🔑 Entitlements](#entitlements)
 {{- end }}
 	- [DSC](#dsc)
 		- [WebKit](#webkit)
 		- [Dylibs](#dylibs)
-{{- if .Dylibs }}			
+{{- if .Dylibs }}
 {{- if .Dylibs.New }}
-			- [🆕 NEW ({{ len .Dylibs.New }})](#-new-2)
+		  - [🆕 NEW ({{ len .Dylibs.New }})](#-new-2)
 {{- end }}
 {{- if .Dylibs.Removed }}
-			- [❌ Removed ({{ len .Dylibs.Removed }})](#️-removed-2)
+		  - [❌ Removed ({{ len .Dylibs.Removed }})](#️-removed-2)
 {{- end }}
 {{- if .Dylibs.Updated }}
-			- [⬆️ Updated ({{ len .Dylibs.Updated }})](#️-updated-2)
+		  - [⬆️ Updated ({{ len .Dylibs.Updated }})](#️-updated-2)
 {{- end }}
 {{- end }}
 
@@ -74,14 +77,15 @@ const diffMarkdownTemplate = `
 - {{ .New.IPSWPath | base }}
 
 ## Kernel
-
+{{ if .Old.Kernel.Version }}
 ### Version
 
 | iOS                                     | Version                                 | Build                                | Date                                  |
 | :-------------------------------------- | :-------------------------------------- | :----------------------------------- | :------------------------------------ |
 | {{ .Old.Version }} *({{ .Old.Build }})* | {{ .Old.Kernel.Version.KernelVersion.Darwin }} | {{ .Old.Kernel.Version.KernelVersion.XNU }} | {{ .Old.Kernel.Version.KernelVersion.Date.Format "Mon, 02Jan2006 15:04:05 MST" }} |
 | {{ .New.Version }} *({{ .New.Build }})* | {{ .New.Kernel.Version.KernelVersion.Darwin }} | {{ .New.Kernel.Version.KernelVersion.XNU }} | {{ .New.Kernel.Version.KernelVersion.Date.Format "Mon, 02Jan2006 15:04:05 MST" }} |
-
+{{ end -}}
+{{ if .Kexts }}
 ### Kexts
 {{ if .Kexts.New }}
 ### 🆕 NEW
@@ -108,14 +112,14 @@ const diffMarkdownTemplate = `
 
 </details>
 {{ end -}}
-
+{{ end -}}
 {{ if .KDKs }}
 ## KDKs
 - {{ .Old.KDK | code}}
 - {{ .New.KDK | code}}
 
 {{ .KDKs | noescape }}
-{{end -}}
+{{ end -}}
 
 {{- if .Machos }}
 ## MachOs
@@ -146,7 +150,7 @@ const diffMarkdownTemplate = `
 {{ end -}}
 {{ end -}}
 {{ if .Ents }}
-### Entitlements
+### 🔑 Entitlements
 <details>
   <summary><i>View Entitlements</i></summary>
 
@@ -154,6 +158,36 @@ const diffMarkdownTemplate = `
 
 </details>
 {{ end -}}
+
+{{- if .Firmwares }}
+## Firmwares
+{{ if .Firmwares.New }}
+### 🆕 NEW
+{{ range .Firmwares.New }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Firmwares.Removed }}
+### ❌ Removed
+{{ range .Firmwares.Removed }}
+- {{ . | code }}
+{{ end }}
+{{ end -}}
+{{- if .Firmwares.Updated }}
+### ⬆️ Updated
+<details>
+  <summary><i>View Updated</i></summary>
+
+{{ range $key, $value := .Firmwares.Updated }}
+#### {{ $key | base }}
+> {{ $key | code }}
+{{ $value | noescape }}
+{{ end }}
+
+</details>
+{{ end -}}
+{{ end -}}
+
 {{ if .Launchd }}
 ## launchd Config
 {{ .Launchd | noescape }}
@@ -161,13 +195,14 @@ const diffMarkdownTemplate = `
 
 ## DSC
 
+{{ if .Old.Webkit }}
 ### WebKit
 
 | iOS                                     | Version           |
 | :-------------------------------------- | :---------------- |
 | {{ .Old.Version }} *({{ .Old.Build }})* | {{ .Old.Webkit }} |
 | {{ .New.Version }} *({{ .New.Build }})* | {{ .New.Webkit }} |
-
+{{ end -}}
 {{- if .Dylibs }}
 ### Dylibs
 {{ if .Dylibs.New }}
@@ -230,7 +265,28 @@ func (d *Diff) String() string {
 	return tmptout.String()
 }
 
-func (d *Diff) ToHTML(folder string) error {
+// ToJSON saves the diff as a JSON file
+func (d *Diff) ToJSON() error {
+	dat, err := json.MarshalIndent(d, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if len(d.conf.Output) > 0 {
+		if err := os.MkdirAll(d.conf.Output, 0755); err != nil {
+			return err
+		}
+		fname := filepath.Join(d.conf.Output, fmt.Sprintf("%s.json", d.Title))
+		log.Infof("Creating JSON diff file: %s", fname)
+		return os.WriteFile(fname, dat, 0644)
+	}
+
+	fmt.Println(string(dat))
+
+	return nil
+}
+
+func (d *Diff) ToHTML() error {
 	htmlHeader := `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -265,11 +321,11 @@ func (d *Diff) ToHTML(folder string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(folder, 0755); err != nil {
+	if err := os.MkdirAll(d.conf.Output, 0755); err != nil {
 		return err
 	}
 
-	fname := filepath.Join(folder, fmt.Sprintf("%s.html", d.Title))
+	fname := filepath.Join(d.conf.Output, fmt.Sprintf("%s.html", d.Title))
 	log.Infof("Creating HTML diff file: %s", fname)
 	return os.WriteFile(fname, htmlBuf.Bytes(), 0644)
 }

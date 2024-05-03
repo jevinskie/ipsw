@@ -1,23 +1,25 @@
 ---
-id: iboot
-title: iboot
+id: rsr
+title: rsr
 hide_title: true
 hide_table_of_contents: true
-sidebar_label: iboot
-description: Dump firmwares
+sidebar_label: rsr
+description: Patch RSR OTAs
 ---
-## ipsw iboot
+## ipsw ota patch rsr
 
-Dump firmwares
+Patch RSR OTAs
 
 ```
-ipsw iboot <IBOOT_BIN> [flags]
+ipsw ota patch rsr [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for iboot
+  -h, --help            help for rsr
+  -i, --input string    Input folder
+  -o, --output string   Output folder
 ```
 
 ### Options inherited from parent commands
@@ -31,5 +33,5 @@ ipsw iboot <IBOOT_BIN> [flags]
 
 ### SEE ALSO
 
-* [ipsw](/docs/cli/ipsw)	 - Download and Parse IPSWs (and SO much more)
+* [ipsw ota patch](/docs/cli/ipsw/ota/patch)	 - Patch OTAs
 

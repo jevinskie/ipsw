@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -40,7 +40,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-var supportedOSes = []string{"audioOS", "bridgeOS", "iOS", "iPadOS", "iPodOS", "macOS", "tvOS", "watchOS"}
+var supportedOSes = []string{"audioOS", "bridgeOS", "iOS", "iPadOS", "iPodOS", "macOS", "tvOS", "watchOS", "visionOS"}
 var supportedRsrOSes = []string{"iOS", "iPadOS", "macOS"}
 var supportedFWs = []string{"ipsw", "ota", "rsr"}
 
@@ -263,7 +263,7 @@ var downloadAppledbCmd = &cobra.Command{
 				return fmt.Errorf("failed to marshal json: %v", err)
 			}
 
-			if viper.GetBool("color") {
+			if viper.GetBool("color") && !viper.GetBool("no-color") {
 				if err := quick.Highlight(os.Stdout, string(jsonData)+"\n", "json", "terminal256", "nord"); err != nil {
 					return fmt.Errorf("failed to highlight json: %v", err)
 				}
@@ -312,27 +312,36 @@ var downloadAppledbCmd = &cobra.Command{
 					log.WithFields(log.Fields{"devices": d, "build": b, "version": v}).Info("Parsing remote IPSW")
 
 					config := &extract.Config{
-						URL:      url,
-						Pattern:  pattern,
-						Proxy:    proxy,
-						Insecure: insecure,
-						Flatten:  flat,
-						Progress: true,
-						Output:   output,
+						URL:          url,
+						Pattern:      pattern,
+						Proxy:        proxy,
+						Insecure:     insecure,
+						KernelDevice: device,
+						Flatten:      flat,
+						Progress:     true,
+						Output:       output,
 					}
 
 					// REMOTE KERNEL MODE
 					if kernel {
 						log.Info("Extracting remote kernelcache")
-						if _, err := extract.Kernelcache(config); err != nil {
-							return fmt.Errorf("failed to extract kernelcache from remote IPSW: %v", err)
+						if out, err := extract.Kernelcache(config); err != nil {
+							return err
+						} else {
+							for fn := range out {
+								utils.Indent(log.Info, 2)("Created " + fn)
+							}
 						}
 					}
 					// PATTERN MATCHING MODE
 					if len(pattern) > 0 {
 						log.Infof("Downloading files matching pattern %#v", pattern)
-						if _, err := extract.Search(config); err != nil {
+						if out, err := extract.Search(config); err != nil {
 							return err
+						} else {
+							for _, f := range out {
+								utils.Indent(log.Info, 2)("Created " + f)
+							}
 						}
 					}
 				}

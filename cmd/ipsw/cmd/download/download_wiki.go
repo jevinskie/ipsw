@@ -27,7 +27,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -37,8 +36,6 @@ import (
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/info"
-	"github.com/blacktop/ipsw/pkg/kernelcache"
-	"github.com/blacktop/ipsw/pkg/ota"
 	"github.com/blacktop/ipsw/pkg/plist"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -237,11 +234,13 @@ var wikiCmd = &cobra.Command{
 						log.Errorf("failed parsing remote IPSW URL: %v", err)
 						continue
 					}
-					log.WithFields(log.Fields{
-						"devices": i.Plists.Restore.SupportedProductTypes,
-						"build":   i.Plists.BuildManifest.ProductBuildVersion,
-						"version": i.Plists.BuildManifest.ProductVersion,
-					}).Infof("Parsing (%d/%d) IPSW", idx+1, len(filteredIPSW))
+					if i.Plists.BuildIdentities != nil && i.Plists.Restore != nil {
+						log.WithFields(log.Fields{
+							"devices": i.Plists.Restore.SupportedProductTypes,
+							"build":   i.Plists.BuildManifest.ProductBuildVersion,
+							"version": i.Plists.BuildManifest.ProductVersion,
+						}).Infof("Parsing (%d/%d) IPSW", idx+1, len(filteredIPSW))
+					}
 					db[ipsw.URL] = i
 				}
 				dat, err := json.Marshal(db)
@@ -275,13 +274,14 @@ var wikiCmd = &cobra.Command{
 							log.WithFields(log.Fields{"devices": d, "build": b, "version": v}).Info("Parsing remote IPSW")
 
 							config := &extract.Config{
-								URL:      ipsw.URL,
-								Pattern:  pattern,
-								Proxy:    proxy,
-								Insecure: insecure,
-								Flatten:  flat,
-								Progress: true,
-								Output:   destPath,
+								URL:          ipsw.URL,
+								Pattern:      pattern,
+								Proxy:        proxy,
+								Insecure:     insecure,
+								KernelDevice: device,
+								Flatten:      flat,
+								Progress:     true,
+								Output:       destPath,
 							}
 
 							// REMOTE KERNEL MODE
@@ -444,11 +444,13 @@ var wikiCmd = &cobra.Command{
 							log.Errorf("failed parsing remote OTA URL: %v", err)
 							continue
 						}
-						log.WithFields(log.Fields{
-							"devices": i.Plists.MobileAssetProperties.SupportedDevices,
-							"build":   i.Plists.BuildManifest.ProductBuildVersion,
-							"version": i.Plists.BuildManifest.ProductVersion,
-						}).Infof("Parsing (%d/%d) OTA", idx+1, len(otas))
+						if i.Plists.BuildIdentities != nil {
+							log.WithFields(log.Fields{
+								"devices": i.Plists.MobileAssetProperties.SupportedDevices,
+								"build":   i.Plists.BuildManifest.ProductBuildVersion,
+								"version": i.Plists.BuildManifest.ProductVersion,
+							}).Infof("Parsing (%d/%d) OTA", idx+1, len(otas))
+						}
 						// dat, err := json.Marshal(i)
 						// if err != nil {
 						// 	return fmt.Errorf("failed to marshal OTA metadata: %v", err)
@@ -502,62 +504,36 @@ var wikiCmd = &cobra.Command{
 								"model":   strings.Join(o.Devices, " "),
 							}).Info("Getting remote OTA")
 
-							zr, err := download.NewRemoteZipReader(o.URL, &download.RemoteConfig{
-								Proxy:    proxy,
-								Insecure: insecure,
-							})
-							if err != nil {
-								return fmt.Errorf("failed to open remote zip to OTA: %v", err)
+							config := &extract.Config{
+								URL:          o.URL,
+								Pattern:      pattern,
+								Proxy:        proxy,
+								Insecure:     insecure,
+								KernelDevice: device,
+								Flatten:      flat,
+								Progress:     true,
+								Output:       destPath,
 							}
-							inf, err := info.ParseZipFiles(zr.File)
-							if err != nil {
-								return fmt.Errorf("failed to parse remote IPSW metadata: %v", err)
-							}
-							folder, err := inf.GetFolder()
-							if err != nil {
-								log.Errorf("failed to get folder from remote zip metadata: %v", err)
-							}
-							folder = filepath.Join(destPath, folder)
 
-							if kernel { // REMOTE KERNEL MODE
+							// REMOTE KERNEL MODE
+							if kernel {
 								log.Info("Extracting remote kernelcache")
-								_, err = kernelcache.RemoteParse(zr, folder)
-								if err != nil {
-									return fmt.Errorf("failed to download kernelcache from remote ota: %v", err)
+								if out, err := extract.Kernelcache(config); err != nil {
+									return err
+								} else {
+									for fn := range out {
+										utils.Indent(log.Info, 2)("Created " + fn)
+									}
 								}
 							}
 							// PATTERN MATCHING MODE
 							if len(pattern) > 0 {
-								re, err := regexp.Compile(pattern)
-								if err != nil {
-									return fmt.Errorf("failed to compile regex for pattern '%s': %v", pattern, err)
-								}
 								log.Infof("Downloading files matching pattern %#v", pattern)
-								if _, err := utils.SearchZip(zr.File, re, folder, flat, true); err != nil {
-									utils.Indent(log.Warn, 2)("0 files matched pattern in remote OTA zip. Now checking payloadv2 payloads...")
-									rfiles, err := ota.RemoteList(zr)
-									if err != nil {
-										return fmt.Errorf("failed to list remote OTA files: %v", err)
-									}
-									var matches []string
-									for _, rf := range rfiles {
-										if re.MatchString(rf.Name()) {
-											matches = append(matches, rf.Name())
-										}
-									}
-									if len(matches) == 0 {
-										return fmt.Errorf("no files matched pattern %#v in remote OTA zip", pattern)
-									}
-									err = ota.RemoteExtract(zr, pattern, folder, func(path string) bool {
-										for i, v := range matches {
-											if strings.HasSuffix(v, filepath.Base(path)) {
-												matches = append(matches[:i], matches[i+1:]...)
-											}
-										}
-										return len(matches) == 0 // stop if we've extracted all matches
-									})
-									if err != nil {
-										return fmt.Errorf("failed to download dyld_shared_cache from remote ota: %v", err)
+								if out, err := extract.Search(config); err != nil {
+									return err
+								} else {
+									for _, f := range out {
+										utils.Indent(log.Info, 2)("Created " + f)
 									}
 								}
 							}

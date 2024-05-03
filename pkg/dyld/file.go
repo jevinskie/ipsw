@@ -1124,6 +1124,98 @@ func (f *File) parseSlideInfo(uuid mtypes.UUID, mapping *CacheMappingWithSlideIn
 				rebaseChainV4(pageOffset, start*4)
 			}
 		}
+	case 5:
+		slideInfo := CacheSlideInfo5{}
+		if err := binary.Read(sr, binary.LittleEndian, &slideInfo); err != nil {
+			return nil, err
+		}
+
+		f.SlideInfo = slideInfo
+
+		if !parsePages {
+			return nil, nil
+		}
+
+		output(dump, "slide info version = %d\n", slideInfo.Version)
+		output(dump, "page_size          = %#x\n", slideInfo.PageSize)
+		output(dump, "page_starts_count  = %d\n", slideInfo.PageStartsCount)
+		output(dump, "auth_value_add     = %#x\n", slideInfo.ValueAdd)
+
+		var targetValue uint64
+		var pointer CacheSlidePointer5
+
+		starts := make([]uint16, slideInfo.PageStartsCount)
+		if err := binary.Read(sr, binary.LittleEndian, &starts); err != nil {
+			return nil, err
+		}
+
+		if endPage == 0 || endPage > uint64(len(starts)-1) {
+			endPage = uint64(len(starts) - 1) // set end page to MAX
+		}
+
+		for i, start := range starts[startPage:endPage] {
+			i += int(startPage)
+			pageAddress := mapping.Address + uint64(uint32(i)*slideInfo.PageSize)
+			pageOffset := mapping.FileOffset + uint64(uint32(i)*slideInfo.PageSize)
+
+			delta := uint64(start)
+
+			if delta == DYLD_CACHE_SLIDE_V5_PAGE_ATTR_NO_REBASE {
+				output(dump, "page[% 5d]: no rebasing\n", i)
+				continue
+			}
+
+			output(dump, "page[% 5d]: start=0x%04X\n", i, delta)
+
+			rebaseLocation := pageOffset
+			rebaseAddr := pageAddress
+
+			for {
+				rebaseLocation += delta
+				rebaseAddr += delta
+
+				sr.Seek(int64(rebaseLocation), io.SeekStart)
+				if err := binary.Read(sr, binary.LittleEndian, &pointer); err != nil {
+					return nil, err
+				}
+
+				if pointer.Authenticated() {
+					targetValue = slideInfo.ValueAdd + pointer.Value()
+				} else {
+					targetValue = slideInfo.ValueAdd + pointer.SignExtend51()
+				}
+
+				if dump {
+					sym, ok := f.AddressToSymbol[targetValue]
+					if !ok {
+						symName = "?"
+					} else {
+						symName = sym
+					}
+					fmt.Printf("    [% 5d + 0x%05X] (off: %#x @ vaddr: %#x; raw: %#x => target: %#x) %s, sym: %s\n", i, (uint64)(rebaseLocation-pageOffset), rebaseLocation, rebaseAddr, pointer.Raw(), targetValue, pointer, symName)
+				} else {
+					sym, ok := f.AddressToSymbol[targetValue]
+					if !ok {
+						symName = ""
+					} else {
+						symName = sym
+					}
+					rebases = append(rebases, Rebase{
+						CacheFileOffset: rebaseLocation,
+						CacheVMAddress:  rebaseAddr,
+						Target:          targetValue,
+						Pointer:         pointer,
+						Symbol:          symName,
+					})
+				}
+
+				if pointer.OffsetToNextPointer() == 0 {
+					break
+				}
+
+				delta = pointer.OffsetToNextPointer() * 8
+			}
+		}
 	default:
 		log.Errorf("got unexpected dyld slide info version: %d", slideInfoVersion)
 	}
@@ -1626,13 +1718,22 @@ func (f *File) Image(name string) (*CacheImage, error) {
 		return f.Images[idx], nil
 	}
 	// slow path
+	var matches []*CacheImage
 	for _, i := range f.Images {
 		if strings.EqualFold(strings.ToLower(i.Name), strings.ToLower(name)) {
-			return i, nil
+			matches = append(matches, i)
+		} else if strings.EqualFold(strings.ToLower(filepath.Base(i.Name)), strings.ToLower(name)) {
+			matches = append(matches, i)
 		}
-		if strings.EqualFold(strings.ToLower(filepath.Base(i.Name)), strings.ToLower(name)) {
-			return i, nil
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	} else if len(matches) > 1 {
+		var names []string
+		for _, m := range matches {
+			names = append(names, m.Name)
 		}
+		return nil, fmt.Errorf("multiple images found for %s (please supply FULL path):\n\t- %s", name, strings.Join(names, "\n\t- "))
 	}
 	return nil, fmt.Errorf("image %s not found in cache", name)
 }

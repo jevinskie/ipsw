@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -57,12 +57,15 @@ func getImages(dscPath string) []string {
 func init() {
 	rootCmd.AddCommand(classDumpCmd)
 
-	classDumpCmd.Flags().Bool("headers", false, "Dump ObjC headers")
 	classDumpCmd.Flags().Bool("deps", false, "Dump imported private frameworks")
 	classDumpCmd.Flags().BoolP("xcfw", "x", false, "🚧 Generate a XCFramework for the dylib")
+	// classDumpCmd.Flags().BoolP("generic", "g", false, "🚧 Generate a XCFramework for ALL targets")
+	classDumpCmd.Flags().BoolP("spm", "s", false, "🚧 Generate a Swift Package for the dylib")
+	classDumpCmd.Flags().Bool("demangle", false, "Demangle symbol names (same as verbose)")
+	classDumpCmd.Flags().Bool("headers", false, "Dump ObjC headers")
 	classDumpCmd.Flags().StringP("output", "o", "", "Folder to write headers to")
 	classDumpCmd.MarkFlagDirname("output")
-	classDumpCmd.Flags().StringP("theme", "t", "nord", "Color theme (nord, github, etc)")
+	classDumpCmd.Flags().String("theme", "nord", "Color theme (nord, github, etc)")
 	classDumpCmd.RegisterFlagCompletionFunc("theme", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return styles.Names(), cobra.ShellCompDirectiveNoFileComp
 	})
@@ -72,10 +75,14 @@ func init() {
 	classDumpCmd.Flags().Bool("refs", false, "Dump ObjC references too")
 	classDumpCmd.Flags().Bool("re", false, "RE verbosity (with addresses)")
 	classDumpCmd.Flags().String("arch", "", "Which architecture to use for fat/universal MachO")
+	classDumpCmd.MarkFlagsMutuallyExclusive("headers", "xcfw", "spm")
 
-	viper.BindPFlag("class-dump.headers", classDumpCmd.Flags().Lookup("headers"))
 	viper.BindPFlag("class-dump.deps", classDumpCmd.Flags().Lookup("deps"))
 	viper.BindPFlag("class-dump.xcfw", classDumpCmd.Flags().Lookup("xcfw"))
+	// viper.BindPFlag("class-dump.generic", classDumpCmd.Flags().Lookup("generic"))
+	viper.BindPFlag("class-dump.spm", classDumpCmd.Flags().Lookup("spm"))
+	viper.BindPFlag("class-dump.demangle", classDumpCmd.Flags().Lookup("demangle"))
+	viper.BindPFlag("class-dump.headers", classDumpCmd.Flags().Lookup("headers"))
 	viper.BindPFlag("class-dump.output", classDumpCmd.Flags().Lookup("output"))
 	viper.BindPFlag("class-dump.class", classDumpCmd.Flags().Lookup("class"))
 	viper.BindPFlag("class-dump.proto", classDumpCmd.Flags().Lookup("proto"))
@@ -91,7 +98,7 @@ var classDumpCmd = &cobra.Command{
 	// TODO: is this too much magic? (should we be explicit about what the input is?)
 	Use:     "class-dump [<DSC> <DYLIB>|<MACHO>]",
 	Aliases: []string{"cd"},
-	Short:   "ObjC class-dump a dylib from a DSC or a MachO binary",
+	Short:   "ObjC class-dump a dylib from a DSC or MachO",
 	Args:    cobra.MinimumNArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) == 1 {
@@ -104,21 +111,31 @@ var classDumpCmd = &cobra.Command{
 		var m *macho.File
 		var o *mcmd.ObjC
 
-		if Verbose {
+		if viper.GetBool("verbose") {
 			log.SetLevel(log.DebugLevel)
 		}
-		color.NoColor = NoColor
+		color.NoColor = viper.GetBool("no-color")
 
+		// flag validation
 		if viper.GetBool("class-dump.headers") &&
 			(viper.GetString("class-dump.class") != "" ||
 				viper.GetString("class-dump.proto") != "" ||
 				viper.GetString("class-dump.cat") != "") {
 			return fmt.Errorf("cannot dump --headers and use --class, --protocol or --category flags")
-		} else if viper.GetBool("class-dump.headers") && viper.GetBool("class-dump.xcfw") {
-			return fmt.Errorf("cannot dump --headers and use --xcfw flag")
+		} else if viper.GetBool("class-dump.headers") && (viper.GetBool("class-dump.xcfw") || viper.GetBool("class-dump.spm")) {
+			return fmt.Errorf("cannot dump --headers and use --xcfw or --spm flags")
 		} else if viper.GetBool("class-dump.re") && !Verbose {
 			return fmt.Errorf("cannot use --re without --verbose")
+		} else if len(viper.GetString("class-dump.output")) > 0 && (!viper.GetBool("class-dump.headers") && !viper.GetBool("class-dump.xcfw") && !viper.GetBool("class-dump.spm")) {
+			return fmt.Errorf("cannot set --output without setting --headers, --xcfw or --spm")
 		}
+		// } else if viper.GetBool("class-dump.generic") && !viper.GetBool("class-dump.xcfw") {
+		// 	return fmt.Errorf("cannot use --generic without --xcfw")
+		// }
+
+		// if viper.GetBool("class-dump.generic") {
+		// 	log.Warn("Generating XCFramework for ALL targets (this might causes errors as some symbols are not available on all platforms)")
+		// }
 
 		if len(viper.GetString("class-dump.output")) > 0 {
 			if err := os.MkdirAll(viper.GetString("class-dump.output"), 0o750); err != nil {
@@ -127,13 +144,14 @@ var classDumpCmd = &cobra.Command{
 		}
 
 		conf := mcmd.ObjcConfig{
-			Verbose:     Verbose,
-			Addrs:       viper.GetBool("class-dump.re"),
-			Headers:     viper.GetBool("class-dump.headers"),
-			ObjcRefs:    viper.GetBool("class-dump.refs"),
-			Deps:        viper.GetBool("class-dump.deps"),
-			IpswVersion: fmt.Sprintf("Version: %s, BuildTime: %s", strings.TrimSpace(AppVersion), strings.TrimSpace(AppBuildTime)),
-			Color:       Color && !NoColor,
+			Verbose:  Verbose || viper.GetBool("class-dump.demangle"),
+			Addrs:    viper.GetBool("class-dump.re"),
+			Headers:  viper.GetBool("class-dump.headers"),
+			ObjcRefs: viper.GetBool("class-dump.refs"),
+			Deps:     viper.GetBool("class-dump.deps"),
+			// Generic:     viper.GetBool("class-dump.generic"),
+			IpswVersion: fmt.Sprintf("Version: %s, BuildCommit: %s", strings.TrimSpace(AppVersion), strings.TrimSpace(AppBuildCommit)),
+			Color:       viper.GetBool("color") && !viper.GetBool("no-color"),
 			Theme:       viper.GetString("class-dump.theme"),
 			Output:      viper.GetString("class-dump.output"),
 		}
@@ -203,12 +221,12 @@ var classDumpCmd = &cobra.Command{
 
 			img, err := f.Image(args[1])
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to find dylib in DSC: %v", err)
 			}
 
 			m, err = img.GetMacho()
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to parse MachO from dylib: %v", err)
 			}
 
 			conf.Name = filepath.Base(img.Name)
@@ -225,6 +243,10 @@ var classDumpCmd = &cobra.Command{
 
 		if viper.GetBool("class-dump.xcfw") {
 			return o.XCFramework()
+		}
+
+		if viper.GetBool("class-dump.spm") {
+			return o.SwiftPackage()
 		}
 
 		if viper.GetString("class-dump.class") != "" {

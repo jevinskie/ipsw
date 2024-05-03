@@ -61,12 +61,13 @@ Usage:
 
 Available Commands:
   appstore        Interact with the App Store Connect API
+  class-dump      ObjC class-dump a dylib from a DSC or MachO
   device-list     List all iOS devices
   diff            Diff IPSWs
   download        Download Apple Firmware files (and more)
   dtree           Parse DeviceTree
   dyld            Parse dyld_shared_cache
-  ent             Search IPSW filesystem DMG for MachOs with a given entitlement
+  ent             Search IPSW filesystem DMG or Folder for MachOs with a given entitlement
   extract         Extract kernelcache, dyld_shared_cache or DeviceTree from IPSW/OTA
   help            Help about any command
   iboot           Dump firmwares
@@ -79,8 +80,10 @@ Available Commands:
   mount           Mount DMG from IPSW
   ota             Parse OTAs
   plist           Dump plist as JSON
+  pongo           PongoOS Terminal
   sepfw           Dump MachOs
   ssh             SSH into a jailbroken device
+  swift-dump      🚧 Swift class-dump a dylib from a DSC or MachO
   symbolicate     Symbolicate ARM 64-bit crash logs (similar to Apple's symbolicatecrash)
   update          Download an ipsw update if one exists
   version         Print the version number of ipsw
@@ -90,6 +93,7 @@ Flags:
       --color           colorize output
       --config string   config file (default is $HOME/.config/ipsw/config.yaml)
   -h, --help            help for ipsw
+      --no-color        disable colorize output
   -V, --verbose         verbose output
 
 Use "ipsw [command] --help" for more information about a command.
@@ -127,6 +131,10 @@ Here are ways to get in touch with the `ipsw` community:
 ## Credit
 
 Big shout out to Jonathan Levin's amazing books and his legendary `jtool`
+
+## Stargazers
+
+[![Stargazers over time](https://starchart.cc/blacktop/ipsw.svg?variant=adaptive)](https://starchart.cc/blacktop/ipsw)
 
 ## License
 

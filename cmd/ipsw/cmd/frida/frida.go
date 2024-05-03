@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const fridaVersion = "16.1.10"
+const fridaVersion = "16.1.11"
 
 func init() {
 	FridaCmd.PersistentFlags().StringP("udid", "u", "", "Device UniqueDeviceID to connect to")
@@ -42,6 +42,7 @@ var FridaCmd = &cobra.Command{
 	Args:    cobra.NoArgs,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		viper.BindPFlag("color", cmd.Flags().Lookup("color"))
+		viper.BindPFlag("no-color", cmd.Flags().Lookup("no-color"))
 		viper.BindPFlag("verbose", cmd.Flags().Lookup("verbose"))
 		viper.BindPFlag("frida.udid", cmd.Flags().Lookup("udid"))
 		viper.BindPFlag("diff-tool", cmd.Flags().Lookup("diff-tool"))

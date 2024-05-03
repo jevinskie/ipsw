@@ -25,12 +25,6 @@ import (
 	"github.com/blacktop/ipsw/pkg/kernelcache"
 )
 
-const (
-	systemOsDmg   = "sys"
-	appOsDmg      = "app"
-	fileSystemDmg = "fs"
-)
-
 type kernel struct {
 	Path    string
 	Version *kernelcache.Version
@@ -41,6 +35,17 @@ type mount struct {
 	DmgPath   string
 	MountPath string
 	IsMounted bool
+}
+
+type Config struct {
+	Title    string
+	IpswOld  string
+	IpswNew  string
+	KDKs     []string
+	LaunchD  bool
+	Firmware bool
+	Filter   []string
+	Output   string
 }
 
 // Context is the context for the diff
@@ -64,58 +69,62 @@ type Context struct {
 
 // Diff is the diff
 type Diff struct {
-	Title string
+	Title string `json:"title,omitempty"`
 
-	Old Context
-	New Context
+	Old Context `json:"-"`
+	New Context `json:"-"`
 
-	Kexts   *mcmd.MachoDiff
-	KDKs    string
-	Ents    string
-	Dylibs  *mcmd.MachoDiff
-	Machos  *mcmd.MachoDiff
-	Launchd string
+	Kexts     *mcmd.MachoDiff `json:"kexts,omitempty"`
+	KDKs      string          `json:"kdks,omitempty"`
+	Ents      string          `json:"ents,omitempty"`
+	Dylibs    *mcmd.MachoDiff `json:"dylibs,omitempty"`
+	Machos    *mcmd.MachoDiff `json:"machos,omitempty"`
+	Firmwares *mcmd.MachoDiff `json:"firmwares,omitempty"`
+	Launchd   string          `json:"launchd,omitempty"`
 
-	tmpDir string
+	tmpDir string `json:"-"`
+	conf   *Config
 }
 
 // New news the diff
-func New(title, ipswOld, ipswNew string, kdks []string) *Diff {
-	if len(kdks) == 0 {
+func New(conf *Config) *Diff {
+	if len(conf.KDKs) == 0 {
 		return &Diff{
-			Title: title,
+			Title: conf.Title,
 			Old: Context{
-				IPSWPath: ipswOld,
+				IPSWPath: conf.IpswOld,
 				Mount:    make(map[string]mount),
 			},
 			New: Context{
-				IPSWPath: ipswNew,
+				IPSWPath: conf.IpswNew,
 				Mount:    make(map[string]mount),
 			},
+			conf: conf,
 		}
 	}
 	return &Diff{
-		Title: title,
+		Title: conf.Title,
 		Old: Context{
-			IPSWPath: ipswOld,
+			IPSWPath: conf.IpswOld,
 			Mount:    make(map[string]mount),
-			KDK:      kdks[0],
+			KDK:      conf.KDKs[0],
 		},
 		New: Context{
-			IPSWPath: ipswNew,
+			IPSWPath: conf.IpswNew,
 			Mount:    make(map[string]mount),
-			KDK:      kdks[1],
+			KDK:      conf.KDKs[1],
 		},
+		conf: conf,
 	}
 }
 
 // Save saves the diff
-func (d *Diff) Save(folder string) error {
-	if err := os.MkdirAll(folder, 0755); err != nil {
+func (d *Diff) Save() error {
+	if err := os.MkdirAll(d.conf.Output, 0755); err != nil {
 		return err
 	}
 
-	fname := filepath.Join(folder, fmt.Sprintf("%s.md", d.Title))
+	fname := filepath.Join(d.conf.Output, fmt.Sprintf("%s.md", d.Title))
 	log.Infof("Creating diff file: %s", fname)
 	f, err := os.Create(fname)
 	if err != nil {
@@ -162,7 +171,7 @@ func (d *Diff) getInfo() (err error) {
 }
 
 // Diff diffs the diff
-func (d *Diff) Diff(launchd bool) (err error) {
+func (d *Diff) Diff() (err error) {
 
 	d.tmpDir, err = os.MkdirTemp(os.TempDir(), "ipsw-diff")
 	if err != nil {
@@ -201,10 +210,17 @@ func (d *Diff) Diff(launchd bool) (err error) {
 		return fmt.Errorf("failed to parse MachOs: %v", err)
 	}
 
-	if launchd {
+	if d.conf.LaunchD {
 		log.Info("Diffing launchd PLIST")
 		if err := d.parseLaunchdPlists(); err != nil {
 			return fmt.Errorf("failed to parse launchd config plists: %v", err)
+		}
+	}
+
+	if d.conf.Firmware {
+		log.Info("Diffing Firmware")
+		if err := d.parseFirmwares(); err != nil {
+			return err
 		}
 	}
 
@@ -220,7 +236,15 @@ func (d *Diff) Diff(launchd bool) (err error) {
 func mountDMG(ctx *Context) (err error) {
 	ctx.SystemOsDmgPath, err = ctx.Info.GetSystemOsDmg()
 	if err != nil {
-		return fmt.Errorf("failed to get SystemOS DMG: %v", err)
+		if errors.Is(err, info.ErrorCryptexNotFound) {
+			utils.Indent(log.Warn, 2)("failed to get SystemOS DMG; trying filesystem DMG")
+			ctx.SystemOsDmgPath, err = ctx.Info.GetFileSystemOsDmg()
+			if err != nil {
+				return fmt.Errorf("failed to get filesystem DMG: %v", err)
+			}
+		} else {
+			return fmt.Errorf("failed to get SystemOS DMG: %v", err)
+		}
 	}
 	if _, err := os.Stat(ctx.SystemOsDmgPath); os.IsNotExist(err) {
 		dmgs, err := utils.Unzip(ctx.IPSWPath, "", func(f *zip.File) bool {
@@ -281,10 +305,10 @@ func (d *Diff) unmountSystemOsDMGs() error {
 }
 
 func (d *Diff) parseKernelcache() error {
-	if _, err := kernelcache.Extract(d.Old.IPSWPath, d.Old.Folder); err != nil {
+	if _, err := kernelcache.Extract(d.Old.IPSWPath, d.Old.Folder, ""); err != nil {
 		return fmt.Errorf("failed to extract kernelcaches from 'Old' IPSW: %v", err)
 	}
-	if _, err := kernelcache.Extract(d.New.IPSWPath, d.New.Folder); err != nil {
+	if _, err := kernelcache.Extract(d.New.IPSWPath, d.New.Folder, ""); err != nil {
 		return fmt.Errorf("failed to extract kernelcaches from 'New' IPSW: %v", err)
 	}
 
@@ -330,6 +354,7 @@ func (d *Diff) parseKernelcache() error {
 		Markdown: true,
 		Color:    false,
 		DiffTool: "git",
+		Filter:   d.conf.Filter,
 	})
 	if err != nil {
 		return err
@@ -361,12 +386,19 @@ func (d *Diff) parseKernelcache() error {
 }
 
 func (d *Diff) parseKDKs() (err error) {
+	if !strings.Contains(d.Old.KDK, ".dSYM/Contents/Resources/DWARF") {
+		d.Old.KDK = filepath.Join(d.Old.KDK+".dSYM/Contents/Resources/DWARF", filepath.Base(d.Old.KDK))
+	}
+	if !strings.Contains(d.New.KDK, ".dSYM/Contents/Resources/DWARF") {
+		d.New.KDK = filepath.Join(d.New.KDK+".dSYM/Contents/Resources/DWARF", filepath.Base(d.New.KDK))
+	}
 	d.KDKs, err = dwarf.DiffStructures(d.Old.KDK, d.New.KDK, &dwarf.Config{
 		Markdown: true,
 		Color:    false,
 		DiffTool: "git",
 	})
-
+	d.Old.KDK, _, _ = strings.Cut(strings.TrimPrefix(d.Old.KDK, "/Library/Developer/KDKs/"), ".dSYM/Contents/Resources/DWARF")
+	d.New.KDK, _, _ = strings.Cut(strings.TrimPrefix(d.New.KDK, "/Library/Developer/KDKs/"), ".dSYM/Contents/Resources/DWARF")
 	return
 }
 
@@ -404,30 +436,21 @@ func (d *Diff) parseDSC() error {
 
 	/* DIFF WEBKIT*/
 
-	image, err := dscOLD.Image("WebKit")
+	d.Old.Webkit, err = dcmd.GetWebkitVersion(dscOLD)
 	if err != nil {
-		return fmt.Errorf("image not in %s: %v", oldDSCes[0], err)
+		return fmt.Errorf("failed to get WebKit version: %v", err)
 	}
-	m, err := image.GetPartialMacho()
-	if err != nil {
-		return err
-	}
-	d.Old.Webkit = m.SourceVersion().Version.String()
 
-	image, err = dscNEW.Image("WebKit")
+	d.New.Webkit, err = dcmd.GetWebkitVersion(dscNEW)
 	if err != nil {
-		return fmt.Errorf("image not in %s: %v", newDSCes[0], err)
+		return fmt.Errorf("failed to get WebKit version: %v", err)
 	}
-	m, err = image.GetPartialMacho()
-	if err != nil {
-		return err
-	}
-	d.New.Webkit = m.SourceVersion().Version.String()
 
 	d.Dylibs, err = dcmd.Diff(dscOLD, dscNEW, &mcmd.DiffConfig{
 		Markdown: true,
 		Color:    false,
 		DiffTool: "git",
+		Filter:   d.conf.Filter,
 	})
 	if err != nil {
 		return err
@@ -459,6 +482,7 @@ func (d *Diff) parseMachos() (err error) {
 		Markdown: true,
 		Color:    false,
 		DiffTool: "git",
+		Filter:   d.conf.Filter,
 	})
 	return
 }
@@ -484,4 +508,14 @@ func (d *Diff) parseLaunchdPlists() error {
 	}
 
 	return nil
+}
+
+func (d *Diff) parseFirmwares() (err error) {
+	d.Firmwares, err = mcmd.DiffFirmwares(d.Old.IPSWPath, d.New.IPSWPath, &mcmd.DiffConfig{
+		Markdown: true,
+		Color:    false,
+		DiffTool: "git",
+		Filter:   d.conf.Filter,
+	})
+	return
 }

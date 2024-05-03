@@ -33,6 +33,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/apex/log"
 	"github.com/blacktop/go-plist"
@@ -80,16 +81,21 @@ func init() {
 var entCmd = &cobra.Command{
 	Use:   "ent",
 	Short: "Search IPSW filesystem DMG or Folder for MachOs with a given entitlement",
-	Example: `  # Search IPSW for entitlement key
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --key platform-application
-  # Search local folder for entitlement key
-  ❯ ipsw ent --input /usr/bin --db /tmp --val platform-application
-  # Search IPSW for entitlement value (i.e. one of the <array> strings)
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --val LockdownMode
-  # Dump entitlements for MachO in IPSW
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --file WebContent
-  # Diff two IPSWs
-  ❯ ipsw ent --diff --ipsw <PREV_IPSW> --ipsw <NEW_IPSW> --db /tmp`,
+	Example: heredoc.Doc(`
+		# Search IPSW for entitlement key
+		❯ ipsw ent --ipsw <IPSW> --db /tmp --key platform-application
+
+		# Search local folder for entitlement key
+		❯ ipsw ent --input /usr/bin --db /tmp --val platform-application
+
+		# Search IPSW for entitlement value (i.e. one of the <array> strings)
+		❯ ipsw ent --ipsw <IPSW> --db /tmp --val LockdownMode
+
+		# Dump entitlements for MachO in IPSW
+		❯ ipsw ent --ipsw <IPSW> --db /tmp --file WebContent
+
+		# Diff two IPSWs
+		❯ ipsw ent --diff --ipsw <PREV_IPSW> --ipsw <NEW_IPSW> --db /tmp`),
 	Args:          cobra.NoArgs,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -208,7 +214,7 @@ var entCmd = &cobra.Command{
 				}
 			} else { // DIFF ENTITLEMENT DATABASES
 				log.Info("Diffing entitlement databases...")
-				out, err := ent.DiffDatabases(entDBs[0], entDBs[1], &ent.Config{Markdown: markdown, Color: viper.GetBool("color")})
+				out, err := ent.DiffDatabases(entDBs[0], entDBs[1], &ent.Config{Markdown: markdown, Color: viper.GetBool("color") && !viper.GetBool("no-color")})
 				if err != nil {
 					return fmt.Errorf("failed to diff entitlement databases: %v", err)
 				}
@@ -303,7 +309,7 @@ var entCmd = &cobra.Command{
 			for _, entDB := range entDBs {
 				for f, ent := range entDB {
 					if strings.Contains(strings.ToLower(f), strings.ToLower(searchFile)) {
-						if viper.GetBool("color") {
+						if viper.GetBool("color") && !viper.GetBool("no-color") {
 							fmt.Print(color.New(color.Bold).Sprintf("\n%s\n\n", f))
 							if len(ent) > 0 {
 								quick.Highlight(os.Stdout, ent, "xml", "terminal256", "nord")
@@ -327,7 +333,7 @@ var entCmd = &cobra.Command{
 					if len(ent) == 0 {
 						continue
 					}
-					if viper.GetBool("color") {
+					if viper.GetBool("color") && !viper.GetBool("no-color") {
 						fmt.Print(color.New(color.Bold).Sprintf("\n%s\n\n", f))
 						quick.Highlight(os.Stdout, ent, "xml", "terminal256", "nord")
 					} else {

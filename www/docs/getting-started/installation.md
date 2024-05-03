@@ -36,6 +36,12 @@ brew install blacktop/tap/ipsw-frida
 ## Via [MacPorts](https://www.macports.org)
 
 ```bash
+sudo port install ipsw
+```
+
+### Install development version
+
+```bash
 git clone https://github.com/blacktop/ports ~/.config/macports/blacktop
 ```
 
@@ -108,6 +114,10 @@ sudo dpkg -i ipsw_3.1.199_linux_x86_64.deb
 ```bash
 pacman -U ipsw-bin
 ```
+
+## Install nix package from [NUR](https://github.com/nix-community/NUR)
+
+See [github:blacktop/nur](https://github.com/blacktop/nur)
 
 ## Via binary from the [releases](https://github.com/blacktop/ipsw/releases) page
 

@@ -10,11 +10,14 @@ import (
 	"strings"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/pkg/codesign"
 	"github.com/blacktop/ipsw/internal/commands/extract"
 	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
+	"github.com/blacktop/ipsw/internal/commands/mount"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/dyld"
+	"github.com/blacktop/ipsw/pkg/tbd"
 )
 
 // ImportedBy is a struct that contains information about which dyld_shared_cache dylibs import a given dylib
@@ -688,7 +691,7 @@ func GetStrings(f *dyld.File, pattern string) ([]String, error) {
 
 // GetWebkitVersion returns the WebKit version from a dyld_shared_cache file
 func GetWebkitVersion(f *dyld.File) (string, error) {
-	image, err := f.Image("WebKit")
+	image, err := f.Image("/System/Library/Frameworks/WebKit.framework/WebKit")
 	if err != nil {
 		return "", fmt.Errorf("image not in DSC: %v", err)
 	}
@@ -724,4 +727,79 @@ func GetUserAgent(f *dyld.File, sysVer *extract.SystemVersionPlist) (string, err
 	// 	return "", fmt.Errorf("failed to create MachO for image %s: %v", image.Name, err)
 	// }
 	return "", nil
+}
+
+func OpenFromIPSW(ipswPath string) (*mount.Context, *dyld.File, error) {
+	ctx, err := mount.DmgInIPSW(ipswPath, "sys")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to mount IPSW: %v", err)
+	}
+
+	dscs, err := dyld.GetDscPathsInMount(ctx.MountPoint, false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get DSC paths in %s: %v", ctx.MountPoint, err)
+	}
+	if len(dscs) == 0 {
+		return nil, nil, fmt.Errorf("no DSCs found in IPSW mount %s", ctx.MountPoint)
+	}
+
+	f, err := dyld.Open(dscs[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open DSC: %v", err)
+	}
+
+	return ctx, f, nil
+}
+
+func GetTBD(f *dyld.File, dylib string, private, generic bool) (string, error) {
+	image, err := f.Image(dylib)
+	if err != nil {
+		return "", fmt.Errorf("image not in DSC: %v", err)
+	}
+
+	m, err := image.GetMacho()
+	if err != nil {
+		return "", fmt.Errorf("failed to get macho from image: %v", err)
+	}
+	defer m.Close()
+
+	var reexports []string
+	if rexps := m.GetLoadsByName("LC_REEXPORT_DYLIB"); len(rexps) > 0 {
+		for _, rexp := range rexps {
+			reexports = append(reexports, rexp.(*macho.ReExportDylib).Name)
+		}
+	}
+
+	t, err := tbd.NewTBD(image, reexports, private, generic)
+	if err != nil {
+		return "", fmt.Errorf("failed to create tbd file for %s: %v", dylib, err)
+	}
+
+	outTBD, err := t.Generate()
+	if err != nil {
+		return "", fmt.Errorf("failed to create tbd file for %s: %v", dylib, err)
+	}
+
+	if rexps := m.GetLoadsByName("LC_REEXPORT_DYLIB"); len(rexps) > 0 {
+		for _, rexp := range rexps {
+			image, err := f.Image(rexp.(*macho.ReExportDylib).Name)
+			if err != nil {
+				return "", fmt.Errorf("image not in DSC: %v", err)
+			}
+			t, err := tbd.NewTBD(image, nil, private, generic)
+			if err != nil {
+				return "", fmt.Errorf("failed to create tbd file for %s: %v", dylib, err)
+			}
+
+			rexpOut, err := t.Generate()
+			if err != nil {
+				return "", fmt.Errorf("failed to create tbd file for %s: %v", dylib, err)
+			}
+			outTBD += rexpOut
+		}
+	}
+
+	outTBD += "...\n"
+
+	return outTBD, nil
 }

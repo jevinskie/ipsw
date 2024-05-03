@@ -38,9 +38,9 @@ import (
 func init() {
 	DyldCmd.AddCommand(SlideCmd)
 	SlideCmd.Flags().BoolP("auth", "a", false, "Print only slide info for mappings with auth flags")
-	SlideCmd.Flags().Bool("json", false, "Output as JSON")
+	SlideCmd.Flags().Bool("json", false, "Output as JSONL")
 	SlideCmd.Flags().StringP("cache", "c", "", "path to addr to sym cache file")
-	SlideCmd.Flags().StringP("output", "o", "", "folder to save JSON output")
+	SlideCmd.Flags().StringP("output", "o", "", "folder to save JSONL output")
 	SlideCmd.MarkFlagDirname("output")
 
 	viper.BindPFlag("dyld.slide.auth", SlideCmd.Flags().Lookup("auth"))
@@ -77,7 +77,7 @@ var SlideCmd = &cobra.Command{
 			if err := os.MkdirAll(viper.GetString("dyld.slide.output"), 0750); err != nil {
 				return errors.Wrapf(err, "failed to create output directory %s", viper.GetString("dyld.slide.output"))
 			}
-			f, err := os.Create(filepath.Join(viper.GetString("dyld.slide.output"), "slide_info.json"))
+			f, err := os.Create(filepath.Join(viper.GetString("dyld.slide.output"), "slide_info.jsonl"))
 			if err != nil {
 				return errors.Wrapf(err, "failed to create output file %s", viper.GetString("dyld.slide.output"))
 			}
@@ -152,6 +152,9 @@ var SlideCmd = &cobra.Command{
 							}
 							enc.Encode(rebases)
 						} else {
+							if viper.GetBool("verbose") {
+								fmt.Println(extMapping.String())
+							}
 							f.DumpSlideInfo(uuid, extMapping)
 						}
 					}

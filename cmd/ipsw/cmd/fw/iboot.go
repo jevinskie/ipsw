@@ -19,7 +19,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-package cmd
+package fw
 
 import (
 	"bytes"
@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/apex/log"
@@ -35,20 +36,15 @@ import (
 	"github.com/blacktop/ipsw/pkg/lzfse"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func init() {
-	rootCmd.AddCommand(ibootCmd)
+	FwCmd.AddCommand(ibootCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// ibootCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// ibootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	ibootCmd.Flags().StringP("output", "o", "", "Folder to extract files to")
+	ibootCmd.MarkFlagDirname("output")
+	viper.BindPFlag("fw.iboot.output", ibootCmd.Flags().Lookup("output"))
 }
 
 // ibootCmd represents the iboot command
@@ -60,9 +56,12 @@ var ibootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
-		if Verbose {
+		if viper.GetBool("verbose") {
 			log.SetLevel(log.DebugLevel)
 		}
+
+		// flags
+		output := viper.GetString("fw.iboot.output")
 
 		f, err := os.Open(args[0])
 		if err != nil {
@@ -114,14 +113,16 @@ var ibootCmd = &cobra.Command{
 					name = fmt.Sprintf("firmware%d.bin", found)
 				}
 			}
-
+			if len(output) > 0 {
+				if err := os.MkdirAll(output, 0o750); err != nil {
+					return err
+				}
+				name = filepath.Join(output, name)
+			}
 			utils.Indent(log.Info, 2)(fmt.Sprintf("Dumping %s", name))
-			os.WriteFile(name, decData, 0660)
-			if err != nil {
+			if err := os.WriteFile(name, decData, 0o660); err != nil {
 				return errors.Wrapf(err, "unabled to write file: %s", name)
 			}
-
-			// io.Copy(outf, lr)
 
 			found++
 			dat = dat[firstEndMatch+4:]

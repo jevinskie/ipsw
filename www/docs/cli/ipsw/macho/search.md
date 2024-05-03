@@ -20,6 +20,7 @@ ipsw macho search <IPSW> [flags]
   -g, --category string       Search for specific ObjC category regex
   -c, --class string          Search for specific ObjC class regex
   -h, --help                  help for search
+  -i, --import string         Search for specific import regex
   -r, --ivar string           Search for specific ObjC instance variable regex
   -t, --launch-const string   Search for launch constraint regex
   -l, --load-command string   Search for specific load command regex
@@ -27,6 +28,7 @@ ipsw macho search <IPSW> [flags]
   -x, --section string        Search for specific section regex
   -s, --sel string            Search for specific ObjC selector regex
   -m, --sym string            Search for specific symbol regex
+  -u, --uuid string           Search for MachO by UUID
 ```
 
 ### Options inherited from parent commands

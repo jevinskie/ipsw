@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -176,14 +177,16 @@ func (i *Info) String() string {
 	if i.Plists.OTAInfo != nil {
 		verextra = fmt.Sprintf(" %s", i.Plists.OTAInfo.MobileAssetProperties.ProductVersionExtra)
 	}
-	iStr += fmt.Sprintf(
-		"Version        = %s\n"+
-			"BuildVersion   = %s\n"+
-			"OS Type        = %s\n",
-		i.Plists.BuildManifest.ProductVersion+verextra,
-		i.Plists.BuildManifest.ProductBuildVersion,
-		i.Plists.GetOSType(),
-	)
+	if i.Plists.BuildManifest != nil {
+		iStr += fmt.Sprintf(
+			"Version        = %s\n"+
+				"BuildVersion   = %s\n"+
+				"OS Type        = %s\n",
+			i.Plists.BuildManifest.ProductVersion+verextra,
+			i.Plists.BuildManifest.ProductBuildVersion,
+			i.Plists.GetOSType(),
+		)
+	}
 	if i.Plists.Restore != nil {
 		foundFS := false
 		if fsDMG, err := i.GetFileSystemOsDmg(); err == nil {
@@ -256,10 +259,12 @@ func (i *Info) String() string {
 			}
 		}
 	} else {
-		iStr += "\nDevices\n"
-		iStr += "-------\n"
-		for _, dev := range i.Plists.BuildManifest.SupportedProductTypes {
-			iStr += fmt.Sprintf(" > %s_%s\n", dev, i.Plists.BuildManifest.ProductBuildVersion)
+		if i.Plists.BuildManifest != nil {
+			iStr += "\nDevices\n"
+			iStr += "-------\n"
+			for _, dev := range i.Plists.BuildManifest.SupportedProductTypes {
+				iStr += fmt.Sprintf(" > %s_%s\n", dev, i.Plists.BuildManifest.ProductBuildVersion)
+			}
 		}
 	}
 	return iStr
@@ -275,6 +280,9 @@ type InfoJSON struct {
 }
 
 func (i *Info) ToJSON() InfoJSON {
+	if i.Plists.BuildIdentities == nil {
+		return InfoJSON{Error: "no BuildManifest.plist found"}
+	}
 	return InfoJSON{
 		Type:    i.Plists.Type,
 		Version: i.Plists.BuildManifest.ProductVersion,
@@ -361,7 +369,10 @@ func (i *Info) GetFileSystemOsDmg() (string, error) {
 	if i.Plists != nil && i.Plists.BuildManifest != nil {
 		for _, bi := range i.Plists.BuildIdentities {
 			if fsOS, ok := bi.Manifest["OS"]; ok {
-				dmgs = append(dmgs, fsOS.Info["Path"].(string))
+				// log.Debugf("Found: %s", fsOS.Info["Path"].(string))
+				if !strings.Contains(bi.Info.Variant, "Recovery") {
+					dmgs = append(dmgs, fsOS.Info["Path"].(string))
+				}
 			}
 		}
 		dmgs = utils.Unique(dmgs)
@@ -421,7 +432,16 @@ func (i *Info) GetCPU(board string) string {
 }
 
 // GetFolder returns a folder name for all the devices included in an IPSW
-func (i *Info) GetFolder() (string, error) {
+func (i *Info) GetFolder(device ...string) (string, error) {
+	if i.Plists.BuildManifest == nil {
+		return "", fmt.Errorf("no BuildManifest.plist found")
+	}
+
+	var dev string
+	if len(device) > 0 && len(device[0]) > 0 {
+		dev = device[0]
+	}
+
 	var devs []string
 	if len(i.DeviceTrees) > 0 {
 		for _, dtree := range i.DeviceTrees {
@@ -431,17 +451,29 @@ func (i *Info) GetFolder() (string, error) {
 			}
 			devs = append(devs, dt.ProductType)
 		}
+
 		devs = utils.SortDevices(utils.Unique(devs))
+
+		if len(dev) > 0 {
+			if slices.Contains(devs, dev) {
+				return fmt.Sprintf("%s__%s", i.Plists.BuildManifest.ProductBuildVersion, dev), nil
+			} else {
+				return "", fmt.Errorf("device '%s' not found in IPSW/OTA", dev)
+			}
+		}
+
 		return fmt.Sprintf("%s__%s", i.Plists.BuildManifest.ProductBuildVersion, getAbbreviatedDevList(devs)), nil
-	} else {
-		sort.Strings(i.Plists.BuildManifest.SupportedProductTypes)
-		return fmt.Sprintf("%s__%s", i.Plists.BuildManifest.ProductBuildVersion, getAbbreviatedDevList(i.Plists.BuildManifest.SupportedProductTypes)), nil
 	}
-	// return "", fmt.Errorf("no devices found")
+
+	sort.Strings(i.Plists.BuildManifest.SupportedProductTypes)
+	return fmt.Sprintf("%s__%s", i.Plists.BuildManifest.ProductBuildVersion, getAbbreviatedDevList(i.Plists.BuildManifest.SupportedProductTypes)), nil
 }
 
 // GetFolders returns a list of the IPSW name folders
 func (i *Info) GetFolders() ([]string, error) {
+	if i.Plists.BuildManifest == nil {
+		return nil, fmt.Errorf("no BuildManifest.plist found")
+	}
 	var folders []string
 	if len(i.DeviceTrees) > 0 {
 		for _, dtree := range i.DeviceTrees {
@@ -455,6 +487,9 @@ func (i *Info) GetFolders() ([]string, error) {
 
 // GetFolderForFile returns a list of the IPSW name folders for a given file
 func (i *Info) GetFolderForFile(fileName string) (string, error) {
+	if i.Plists.BuildManifest == nil {
+		return "", fmt.Errorf("no BuildManifest.plist found")
+	}
 	if len(i.DeviceTrees) > 0 {
 		files := i.getManifestPaths()
 		for _, dtree := range i.DeviceTrees {
@@ -490,6 +525,9 @@ type folder struct {
 }
 
 func (i *Info) getFolders() ([]folder, error) {
+	if i.Plists.BuildManifest == nil {
+		return nil, fmt.Errorf("no BuildManifest.plist found")
+	}
 	if len(i.DeviceTrees) > 0 {
 		var fs []folder
 		kcs := i.Plists.BuildManifest.GetKernelCaches()
@@ -539,7 +577,7 @@ func (i *Info) GetDevicesForKernelCache(kc string) []string {
 		if utils.StrSliceHas(kcache, filepath.Base(kc)) {
 			for _, dtree := range i.DeviceTrees {
 				dt, _ := dtree.Summary()
-				if strings.ToLower(bconf) == strings.ToLower(dt.BoardConfig) {
+				if strings.EqualFold(bconf, dt.BoardConfig) {
 					devices = append(devices, dt.ProductType)
 				}
 			}
@@ -556,6 +594,8 @@ func getAbbreviatedDevList(devices []string) string {
 		return ""
 	} else if len(devices) == 1 {
 		return devices[0]
+	} else if strings.Contains(devices[0], "Mac") {
+		return "MacOS"
 	}
 
 	currentDev := devices[0]
@@ -587,7 +627,11 @@ func Parse(ipswPath string) (*Info, error) {
 	}
 	i.DeviceTrees, err = devicetree.Parse(ipswPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse devicetree: %v", err)
+		if errors.Is(err, devicetree.ErrEncryptedDeviceTree) { // FIXME: this is a hack to avoid stopping the parsing of the metadata info
+			log.Error(err.Error())
+		} else {
+			log.Errorf("failed to parse devicetree: %v", err)
+		}
 	}
 
 	return i, nil

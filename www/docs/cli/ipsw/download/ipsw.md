@@ -17,7 +17,7 @@ ipsw download ipsw [flags]
 ### Options
 
 ```
-      --beta                    Download Beta IPSWs
+      --decrypt                 Attempt to decrypt the partial files if keys are available
       --dyld                    Extract dyld_shared_cache(s) from remote IPSW
   -a, --dyld-arch stringArray   dyld_shared_cache architecture(s) to remote extract
   -f, --flat                    Do NOT perserve directory structure when downloading with --pattern

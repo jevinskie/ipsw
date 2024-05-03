@@ -1,23 +1,23 @@
 ---
-id: sepfw
-title: sepfw
+id: fw
+title: fw
 hide_title: true
 hide_table_of_contents: true
-sidebar_label: sepfw
-description: Dump MachOs
+sidebar_label: fw
+description: Firmware commands
 ---
-## ipsw sepfw
+## ipsw fw
 
-Dump MachOs
+Firmware commands
 
 ```
-ipsw sepfw <SEP_FIRMWARE> [flags]
+ipsw fw [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for sepfw
+  -h, --help   help for fw
 ```
 
 ### Options inherited from parent commands
@@ -32,4 +32,6 @@ ipsw sepfw <SEP_FIRMWARE> [flags]
 ### SEE ALSO
 
 * [ipsw](/docs/cli/ipsw)	 - Download and Parse IPSWs (and SO much more)
+* [ipsw fw iboot](/docs/cli/ipsw/fw/iboot)	 - Dump firmwares
+* [ipsw fw sepfw](/docs/cli/ipsw/fw/sepfw)	 - Dump MachOs
 

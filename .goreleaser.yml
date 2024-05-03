@@ -1,3 +1,7 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=jcroql
+version: 1
+
 before:
   hooks:
     - go mod tidy
@@ -11,6 +15,9 @@ snapshot:
   name_template: "{{ incpatch .Version }}-next"
 
 report_sizes: true
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
 
 builds:
   # CLIs ###########################################################
@@ -27,7 +34,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
   - id: darwin_ios_build
     main: ./cmd/ipsw
     binary: ipsw
@@ -41,7 +48,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
     hooks:
       post:
         - ./hack/make/codesign {{ .Path }}
@@ -72,7 +79,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
     hooks:
       post:
         - ./hack/make/delete-all-rpaths {{ .Path }}
@@ -102,7 +109,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
     hooks:
       post:
         - ./hack/make/delete-all-rpaths {{ .Path }}
@@ -127,7 +134,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
   # - id: linux_amd64_extras_build
   #   hooks:
   #     pre:
@@ -154,7 +161,7 @@ builds:
   #   mod_timestamp: "{{ .CommitTimestamp }}"
   #   flags:
   #     - -trimpath
-  #   ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+  #   ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
   # - id: linux_arm64_extras_build
   #   hooks:
   #     pre:
@@ -181,7 +188,7 @@ builds:
   #   mod_timestamp: "{{ .CommitTimestamp }}"
   #   flags:
   #     - -trimpath
-  #   ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+  #   ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
   - id: windows_build
     main: ./cmd/ipsw
     binary: ipsw
@@ -206,7 +213,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion={{.Version}} -X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit={{.Commit}}
   # DAEMONS ###########################################################
   - id: darwin_daemon_build
     main: ./cmd/ipswd
@@ -221,7 +228,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Commit}}
   - id: linux_daemon_build
     main: ./cmd/ipswd
     binary: ipswd
@@ -243,7 +250,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Commit}}
   - id: windows_daemon_build
     main: ./cmd/ipswd
     binary: ipswd
@@ -268,7 +275,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
-    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Date}}
+    ldflags: -s -w -X github.com/blacktop/ipsw/api/types.BuildVersion={{.Version}} -X github.com/blacktop/ipsw/api/types.BuildTime={{.Commit}}
 
 universal_binaries:
   - id: darwin_build
@@ -305,7 +312,6 @@ archives:
       - completions/*
       - manpages/*
       - config.example.yml
-    wrap_in_directory: true
   - id: extras_archive
     builds:
       - darwin_extras_build
@@ -326,7 +332,6 @@ archives:
       - completions/*
       - manpages/*
       - config.example.yml
-    wrap_in_directory: true
   - id: frida_archive
     builds:
       - darwin_frida_build
@@ -345,7 +350,6 @@ archives:
       - completions/*
       - manpages/*
       - config.example.yml
-    wrap_in_directory: true
   - id: daemon_archive
     builds:
       - darwin_daemon_build
@@ -371,7 +375,6 @@ archives:
       - LICENSE
       - completions/ipswd/*
       - config.example.yml
-    wrap_in_directory: true
 
 brews:
   - repository:
@@ -379,7 +382,7 @@ brews:
       name: homebrew-tap
     ids:
       - extras_archive
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/blacktop/ipsw"
     description: "iOS/macOS Research Swiss Army Knife"
     license: MIT
@@ -411,7 +414,7 @@ brews:
       name: homebrew-tap
     ids:
       - frida_archive
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/blacktop/ipsw"
     description: "iOS/macOS Research Swiss Army Knife"
     license: MIT
@@ -439,7 +442,7 @@ brews:
       name: homebrew-tap
     ids:
       - daemon_archive
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/blacktop/ipsw"
     description: "ipsw - Daemon"
     license: MIT
@@ -490,6 +493,21 @@ signs:
 sboms:
   - artifacts: archive
 
+nix:
+  - name: ipsw
+    ids:
+      - default_archive
+    repository:
+      owner: blacktop
+      name: nur
+    homepage: https://github.com/blacktop/ipsw
+    description: iOS/macOS Research Swiss Army Knife
+    path: pkgs/ipsw/default.nix
+    license: mit
+    extra_install: |-
+      installManPage ./manpages/ipsw.1.gz
+      installShellCompletion ./completions/ipsw/*
+
 aurs:
   - ids:
       - default_archive
@@ -503,8 +521,6 @@ aurs:
     backup:
       - etc/ipsw.conf
     package: |-
-      cd ipsw_${pkgver}_linux_${CHOST%%-*}
-
       # bin
       install -Dm755 "./ipsw" "${pkgdir}/usr/bin/ipsw"
 
@@ -540,8 +556,6 @@ aurs:
     backup:
       - etc/ipsw.conf
     package: |-
-      cd ipswd_${pkgver}_linux_${CHOST%%-*}
-
       # bin
       install -Dm755 "./ipswd" "${pkgdir}/usr/bin/ipswd"
 
@@ -870,19 +884,19 @@ changelog:
       regexp: '^.*?(feat|fix|chore)\(deps\)!?:.+$'
       order: 300
     - title: "New Features"
-      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
       order: 100
     - title: "Security updates"
-      regexp: '^.*?sec(\([[:word:]]+\))??!?:.+$'
+      regexp: '^.*?sec(\(.+\))??!?:.+$'
       order: 150
     - title: "Bug fixes"
-      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      regexp: '^.*?(fix|refactor)(\(.+\))??!?:.+$'
       order: 200
     - title: "Documentation updates"
-      regexp: ^.*?(doc|docs)(\([[:word:]]+\))??!?:.+$
+      regexp: ^.*?docs?(\(.+\))??!?:.+$
       order: 400
     - title: "Build process updates"
-      regexp: ^.*?build(\([[:word:]]+\))??!?:.+$
+      regexp: ^.*?(build|ci)(\(.+\))??!?:.+$
       order: 400
     - title: Other work
       order: 9999

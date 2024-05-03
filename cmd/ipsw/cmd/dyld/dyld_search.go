@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -26,8 +26,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-macho"
 	"github.com/blacktop/ipsw/pkg/dyld"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -38,9 +40,13 @@ func init() {
 	DyldCmd.AddCommand(dyldSearchCmd)
 
 	dyldSearchCmd.Flags().StringP("load-command", "l", "", "Search for specific load command regex")
+	dyldSearchCmd.Flags().StringP("import", "i", "", "Search for specific import regex")
 	dyldSearchCmd.Flags().StringP("section", "x", "", "Search for specific section regex")
+	dyldSearchCmd.Flags().StringP("uuid", "u", "", "Search for dylib by UUID")
 	viper.BindPFlag("dyld.search.load-command", dyldSearchCmd.Flags().Lookup("load-command"))
+	viper.BindPFlag("dyld.search.import", dyldSearchCmd.Flags().Lookup("import"))
 	viper.BindPFlag("dyld.search.section", dyldSearchCmd.Flags().Lookup("section"))
+	viper.BindPFlag("dyld.search.uuid", dyldSearchCmd.Flags().Lookup("uuid"))
 }
 
 // dyldSearchCmd represents the search command
@@ -62,9 +68,11 @@ var dyldSearchCmd = &cobra.Command{
 
 		// flags
 		loadCmdReStr := viper.GetString("dyld.search.load-command")
+		importReStr := viper.GetString("dyld.search.import")
 		sectionReStr := viper.GetString("dyld.search.section")
+		uuidStr := viper.GetString("dyld.search.uuid")
 		// verify flags
-		if loadCmdReStr == "" && sectionReStr == "" {
+		if loadCmdReStr == "" && importReStr == "" && sectionReStr == "" && uuidStr == "" {
 			return fmt.Errorf("must specify a search criteria via one of the flags")
 		}
 
@@ -93,10 +101,25 @@ var dyldSearchCmd = &cobra.Command{
 			return fmt.Errorf("failed to open dyld shared cache %s: %w", dscPath, err)
 		}
 
+		var m *macho.File
+
 		for _, img := range f.Images {
-			m, err := img.GetMacho()
-			if err != nil {
-				return err
+			if loadCmdReStr != "" {
+				m, err = img.GetMacho()
+				if err != nil {
+					return err
+				}
+			} else { // use partial macho for speed
+				m, err = img.GetPartialMacho()
+				if err != nil {
+					return err
+				}
+			}
+
+			if uuidStr != "" {
+				if strings.EqualFold(img.UUID.String(), uuidStr) {
+					fmt.Printf("%s\t%s=%s\n", colorImage(filepath.Base(img.Name)), colorField("uuid"), img.UUID)
+				}
 			}
 			if loadCmdReStr != "" {
 				re, err := regexp.Compile(loadCmdReStr)
@@ -106,6 +129,19 @@ var dyldSearchCmd = &cobra.Command{
 				for _, lc := range m.Loads {
 					if re.MatchString(lc.Command().String()) {
 						fmt.Printf("%s\t%s=%s\n", colorImage(filepath.Base(img.Name)), colorField("load"), lc.Command())
+						fmt.Printf("\t%s\n", lc)
+					}
+				}
+			}
+			if importReStr != "" {
+				re, err := regexp.Compile(importReStr)
+				if err != nil {
+					return fmt.Errorf("invalid regex '%s': %w", importReStr, err)
+				}
+				for _, imp := range m.ImportedLibraries() {
+					if re.MatchString(imp) {
+						fmt.Printf("%s\t%s=%s\n", colorImage(filepath.Base(img.Name)), colorField("import"), imp)
+						break
 					}
 				}
 			}

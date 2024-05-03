@@ -1,7 +1,7 @@
 //go:build !ios
 
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -57,7 +57,7 @@ func init() {
 // xcodeCmd represents the xcode command
 var xcodeCmd = &cobra.Command{
 	Use:           "xcode",
-	Short:         "Download XCode",
+	Short:         "🚧 Download XCode 🚧",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Hidden:        true,

@@ -232,6 +232,7 @@ func LocalAppleDBQuery(q *ADBQuery) ([]OsFileSource, error) {
 			return nil, fmt.Errorf("failed to create local copy of 'appledb' repo: %v", err)
 		}
 	} else {
+		utils.Indent(log.Info, 2)(fmt.Sprintf("Updating 'appledb' repo %s", filepath.Join(q.ConfigDir, "appledb")))
 		if _, err := utils.GitRefresh(filepath.Join(q.ConfigDir, "appledb")); err != nil {
 			return nil, fmt.Errorf("failed to update local copy of 'appledb' repo: %v", err)
 		}

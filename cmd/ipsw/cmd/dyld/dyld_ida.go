@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/apex/log"
@@ -50,6 +51,7 @@ func init() {
 	idaCmd.Flags().StringP("ida-path", "p", "", "IDA Pro directory (darwin default: /Applications/IDA Pro */ida64.app/Contents/MacOS)")
 	idaCmd.Flags().StringP("script", "s", "", "IDA Pro script to run")
 	idaCmd.Flags().StringSliceP("script-args", "r", []string{}, "IDA Pro script arguments")
+	idaCmd.Flags().String("diaphora-db", "", "Path to Diaphora database")
 	idaCmd.Flags().BoolP("all", "a", false, "Analyze whole cache (this will take a while)")
 	idaCmd.Flags().BoolP("dependancies", "d", false, "Analyze module dependencies")
 	idaCmd.Flags().BoolP("enable-gui", "g", false, "Enable IDA Pro GUI (defaults to headless)")
@@ -65,6 +67,7 @@ func init() {
 	viper.BindPFlag("dyld.ida.ida-path", idaCmd.Flags().Lookup("ida-path"))
 	viper.BindPFlag("dyld.ida.script", idaCmd.Flags().Lookup("script"))
 	viper.BindPFlag("dyld.ida.script-args", idaCmd.Flags().Lookup("script-args"))
+	viper.BindPFlag("dyld.ida.diaphora-db", idaCmd.Flags().Lookup("diaphora-db"))
 	viper.BindPFlag("dyld.ida.dependancies", idaCmd.Flags().Lookup("dependancies"))
 	viper.BindPFlag("dyld.ida.all", idaCmd.Flags().Lookup("all"))
 	viper.BindPFlag("dyld.ida.enable-gui", idaCmd.Flags().Lookup("enable-gui"))
@@ -113,6 +116,10 @@ var idaCmd = &cobra.Command{
 			return fmt.Errorf("cannot use '--temp-db' and '--delete-db'")
 		} else if len(args) > 2 && viper.GetBool("dyld.ida.dependancies") {
 			log.Warnf("will only load dependancies for first dylib (%s)", args[1])
+		} else if viper.IsSet("dyld.ida.diaphora-db") && !viper.IsSet("dyld.ida.script") {
+			return fmt.Errorf("must supply '--script /path/to/diaphora.py' with '--diaphora-db /path/to/diaphora.db'")
+		} else if (viper.IsSet("dyld.ida.diaphora-db") || strings.Contains(scriptFile, "diaphora.py")) && viper.GetBool("dyld.ida.enable-gui") {
+			return fmt.Errorf("diaphora analysis should be done headless and NOT with '--enable-gui'")
 		}
 
 		if viper.GetString("dyld.ida.slide") != "" {
@@ -258,6 +265,21 @@ var idaCmd = &cobra.Command{
 			dbFile = filepath.Join(folder, fmt.Sprintf("DSC_%s_%s_%s.i64", args[1], f.Headers[f.UUID].Platform, f.Headers[f.UUID].OsVersion))
 		}
 
+		if viper.IsSet("dyld.ida.diaphora-db") || strings.Contains(scriptFile, "diaphora.py") {
+			env = append(env, "DIAPHORA_AUTO=1")
+			env = append(env, "DIAPHORA_USE_DECOMPILER=1")
+			env = append(env, fmt.Sprintf("DIAPHORA_CPU_COUNT=%d", runtime.NumCPU()))
+			if viper.IsSet("dyld.ida.diaphora-db") {
+				env = append(env, fmt.Sprintf("DIAPHORA_EXPORT_FILE=%s", viper.GetString("dyld.ida.diaphora-db")))
+			} else {
+				env = append(env, fmt.Sprintf("DIAPHORA_EXPORT_FILE=%s", filepath.Join(folder, fmt.Sprintf("DSC_%s_%s_%s_diaphora.db", args[1], f.Headers[f.UUID].Platform, f.Headers[f.UUID].OsVersion))))
+			}
+			if viper.GetBool("verbose") {
+				env = append(env, "DIAPHORA_DEBUG=1")
+				env = append(env, "DIAPHORA_LOG_PRINT=1")
+			}
+		}
+
 		if len(logFile) > 0 {
 			logFile = filepath.Join(folder, viper.GetString("dyld.ida.log-file"))
 			if _, err := os.Stat(logFile); err == nil {
@@ -331,7 +353,8 @@ var idaCmd = &cobra.Command{
 		}
 
 		if !viper.GetBool("dyld.ida.temp-db") {
-			log.WithField("db", dbFile).Info("🎉 Done!")
+			cwd, _ := os.Getwd()
+			log.WithField("db", strings.TrimPrefix(dbFile, cwd)).Info("🎉 Done!")
 		}
 
 		return nil

@@ -1,5 +1,7 @@
+//go:build sandbox
+
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -40,17 +42,17 @@ import (
 )
 
 func init() {
-	SbCmd.AddCommand(diffCmd)
+	SbCmd.AddCommand(sbDiffCmd)
 
-	diffCmd.MarkZshCompPositionalArgumentFile(1, "*.ipsw", "*.zip")
-	diffCmd.MarkZshCompPositionalArgumentFile(2, "*.ipsw", "*.zip")
-	diffCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	sbDiffCmd.MarkZshCompPositionalArgumentFile(1, "*.ipsw", "*.zip")
+	sbDiffCmd.MarkZshCompPositionalArgumentFile(2, "*.ipsw", "*.zip")
+	sbDiffCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"ipsw", "zip"}, cobra.ShellCompDirectiveFilterFileExt
 	}
 }
 
-// diffCmd represents the diff command
-var diffCmd = &cobra.Command{
+// sbDiffCmd represents the diff command
+var sbDiffCmd = &cobra.Command{
 	Use:           "diff <IPSW> <IPSW>",
 	Short:         "Diff the sandbox profiles between two macOS IPSWs",
 	Aliases:       []string{"d"},
@@ -76,20 +78,25 @@ var diffCmd = &cobra.Command{
 				return fmt.Errorf("failed to parse IPSW %s: %v", ipswPath, err)
 			}
 
-			appDMG, err := i.GetAppOsDmg()
-			if err != nil {
+			var dmgs []string
+
+			if appDMG, err := i.GetAppOsDmg(); err != nil {
 				return fmt.Errorf("failed to get filesystem DMG path: %v", err)
+			} else {
+				dmgs = append(dmgs, appDMG)
 			}
-			fsDMG, err := i.GetFileSystemOsDmg()
-			if err != nil {
+			if fsDMG, err := i.GetFileSystemOsDmg(); err != nil {
 				return fmt.Errorf("failed to get filesystem DMG path: %v", err)
+			} else {
+				dmgs = append(dmgs, fsDMG)
 			}
-			sysDMG, err := i.GetSystemOsDmg()
-			if err != nil {
+			if sysDMG, err := i.GetSystemOsDmg(); err != nil {
 				return fmt.Errorf("failed to get filesystem DMG path: %v", err)
+			} else {
+				dmgs = append(dmgs, sysDMG)
 			}
 
-			for _, dmgPath := range []string{appDMG, fsDMG, sysDMG} {
+			for _, dmgPath := range dmgs {
 				// check if filesystem DMG already exists (due to previous mount command)
 				if _, err := os.Stat(dmgPath); os.IsNotExist(err) {
 					dmgs, err := utils.Unzip(ipswPath, "", func(f *zip.File) bool {
@@ -167,7 +174,7 @@ var diffCmd = &cobra.Command{
 		for _, f := range files {
 			newSbData := sbDBs[1][f]
 			if oldSbData, ok := sbDBs[0][f]; ok {
-				out, err := utils.GitDiff(oldSbData+"\n", newSbData+"\n", &utils.GitDiffConfig{Color: viper.GetBool("color")})
+				out, err := utils.GitDiff(oldSbData+"\n", newSbData+"\n", &utils.GitDiffConfig{Color: viper.GetBool("color") && !viper.GetBool("no-color")})
 				if err != nil {
 					return fmt.Errorf("failed to diff %s: %v", f, err)
 				}

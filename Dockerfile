@@ -1,9 +1,10 @@
 ####################################################
 # GOLANG BUILDER
 ####################################################
-FROM golang:1.21 as builder
+FROM golang:1.22 as builder
 
 ARG VERSION
+ARG COMMIT
 
 COPY . /go/src/github.com/blacktop/ipsw
 WORKDIR /go/src/github.com/blacktop/ipsw
@@ -11,13 +12,13 @@ WORKDIR /go/src/github.com/blacktop/ipsw
 RUN CGO_ENABLED=1 go build \
     -o /bin/ipsw \
     -ldflags "-X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppVersion=${VERSION}" \
-    -ldflags "-X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildTime=$(date -u +%Y%m%d)" \
+    -ldflags "-X github.com/blacktop/ipsw/cmd/ipsw/cmd.AppBuildCommit=${COMMIT}" \
     ./cmd/ipsw
 
 ####################################################
 # APFS-FUSE BUILDER
 ####################################################
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 LABEL maintainer "https://github.com/blacktop"
 

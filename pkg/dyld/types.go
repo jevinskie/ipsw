@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	MacOSCacheFolder     = "System/Library/dyld/"
-	IPhoneCacheFolder    = "System/Library/Caches/com.apple.dyld/"
-	DriverKitCacheFolder = "System/DriverKit/System/Library/dyld/"
+	MacOSCacheFolder      = "System/Library/dyld/"
+	IPhoneCacheFolder     = "System/Library/Caches/com.apple.dyld/"
+	DriverKitCacheFolder  = "System/DriverKit/System/Library/dyld/"
+	ExclavekitCacheFolder = "/System/ExclaveKit/System/Library/dyld/"
 
 	CacheRegex                           = `System/Library/(dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_`
 	DriverKitCacheRegex                  = `System/DriverKit/System/Library/dyld/dyld_shared_cache_`
@@ -514,6 +515,180 @@ func (i CacheSlideInfo4) SlidePointer(ptr uint64) uint64 {
 		value += i.ValueAdd
 	}
 	return value
+}
+
+type CacheSlideInfo5 struct {
+	Version         uint32 `json:"slide_version,omitempty"` // currently 5
+	PageSize        uint32 `json:"page_size,omitempty"`     //  currently 4096 (may also be 16384)
+	PageStartsCount uint32 `json:"page_starts_count,omitempty"`
+	_               uint32 // padding for 64bit alignment
+	ValueAdd        uint64 `json:"value_add,omitempty"`
+	// PageStarts      []uint16 /* len() = page_starts_count */
+}
+
+const DYLD_CACHE_SLIDE_V5_PAGE_ATTR_NO_REBASE = 0xFFFF // page has no rebasing
+
+func (i CacheSlideInfo5) GetVersion() uint32 {
+	return i.Version
+}
+func (i CacheSlideInfo5) GetPageSize() uint32 {
+	return i.PageSize
+}
+func (i CacheSlideInfo5) SlidePointer(ptr uint64) uint64 {
+	if ptr == 0 {
+		return 0
+	}
+	pointer := CacheSlidePointer5(ptr)
+	if pointer.Authenticated() {
+		return i.ValueAdd + pointer.Value()
+	}
+	return i.ValueAdd + pointer.SignExtend51()
+}
+
+// CacheSlidePointer5 struct
+//
+// The version 5 of the slide info uses a different compression scheme. Since
+// only interior pointers (pointers that point within the cache) are rebased
+// (slid), we know the possible range of the pointers and thus know there are
+// unused bits in each pointer.  We use those bits to form a linked list of
+// locations needing rebasing in each page.
+//
+// Definitions:
+//
+//	pageIndex = (pageAddress - startOfAllDataAddress)/info->page_size
+//	pageStarts[] = info + info->page_starts_offset
+//
+// There are two cases:
+//
+//  1. pageStarts[pageIndex] == DYLD_CACHE_SLIDE_V5_PAGE_ATTR_NO_REBASE
+//     The page contains no values that need rebasing.
+//
+//  2. otherwise...
+//     All rebase locations are in one linked list. The offset of the first
+//     rebase location in the page is pageStarts[pageIndex].
+//
+// A pointer is one of of the variants in dyld_cache_slide_pointer5
+//
+// The code for processing a linked list (chain) is:
+//
+//	uint32_t delta = pageStarts[pageIndex];
+//	dyld_cache_slide_pointer5* loc = pageStart;
+//	do {
+//	    loc += delta;
+//	    delta = loc->offsetToNextPointer;
+//	    newValue = loc->regular.target + value_add + results->slide;
+//	    if ( loc->auth.authenticated ) {
+//	        newValue = sign_using_the_various_bits(newValue);
+//	    }
+//	    else {
+//	        newValue = newValue | (loc->regular.high8 < 56);
+//	    }
+//	    loc->raw = newValue;
+//	} while (delta != 0);
+type CacheSlidePointer5 uint64
+
+// SignExtend51 returns a regular pointer which needs to fit in 51-bits of value.
+// C++ RTTI uses the top bit, so we'll allow the whole top-byte
+// and the signed-extended bottom 43-bits to be fit in to 51-bits.
+func (p CacheSlidePointer5) SignExtend51() uint64 {
+	top8Bits := uint64(p & 0x007F80000000000)
+	bottom43Bits := uint64(p & 0x000007FFFFFFFFFF)
+	return (top8Bits << 13) | (((uint64)(bottom43Bits<<21) >> 21) & 0x00FFFFFFFFFFFFFF)
+}
+
+// Raw returns the chained pointer's raw uint64 value
+func (p CacheSlidePointer5) Raw() uint64 {
+	return uint64(p)
+}
+
+// Value returns the chained pointer's value
+func (p CacheSlidePointer5) Value() uint64 {
+	return types.ExtractBits(uint64(p), 0, 34) // runtimeOffset - offset from the start of the shared cache
+}
+
+func (p CacheSlidePointer5) High8() uint64 {
+	return types.ExtractBits(uint64(p), 34, 8)
+}
+
+// OffsetToNextPointer returns the offset to the next chained pointer
+func (p CacheSlidePointer5) OffsetToNextPointer() uint64 {
+	return types.ExtractBits(uint64(p), 52, 11)
+}
+
+// OffsetFromSharedCacheBase returns the chained pointer's offset from the base
+func (p CacheSlidePointer5) OffsetFromSharedCacheBase() uint64 {
+	return types.ExtractBits(uint64(p), 0, 32)
+}
+
+// DiversityData returns the chained pointer's diversity data
+func (p CacheSlidePointer5) DiversityData() uint64 {
+	return types.ExtractBits(uint64(p), 34, 16)
+}
+
+// HasAddressDiversity returns if the chained pointer has address diversity
+func (p CacheSlidePointer5) HasAddressDiversity() bool {
+	return types.ExtractBits(uint64(p), 50, 1) != 0
+}
+
+// Key returns the chained pointer's key
+func (p CacheSlidePointer5) Key() uint64 {
+	return types.ExtractBits(uint64(p), 51, 1)
+}
+
+// Authenticated returns if the chained pointer is authenticated
+func (p CacheSlidePointer5) Authenticated() bool {
+	return types.ExtractBits(uint64(p), 63, 1) != 0
+}
+
+// KeyName returns the chained pointer's key name
+func KeyNameV5(key uint64) string {
+	name := []string{"IA", "DA"}
+	if key >= 2 {
+		return "ERROR"
+	}
+	return name[key]
+}
+
+func (p CacheSlidePointer5) String() string {
+	if p.Authenticated() {
+		return fmt.Sprintf("value: %#x, next: %02x, diversity: %04x, addr_div: %t, key: %s, auth: %t",
+			p.Value(),
+			p.OffsetToNextPointer(),
+			p.DiversityData(),
+			p.HasAddressDiversity(),
+			KeyNameV5(p.Key()),
+			p.Authenticated(),
+		)
+	}
+	return fmt.Sprintf("value: %#x, next: %02x", p.Value(), p.OffsetToNextPointer())
+}
+
+func (p CacheSlidePointer5) MarshalJSON() ([]byte, error) {
+	if p.Authenticated() {
+		return json.Marshal(&struct {
+			Value               uint64 `json:"value"`
+			OffsetToNextPointer uint64 `json:"next"`
+			DiversityData       uint64 `json:"diversity"`
+			HasAddressDiversity bool   `json:"addr_div"`
+			KeyName             string `json:"key"`
+			Authenticated       bool   `json:"authenticated"`
+		}{
+			Value:               p.Value(),
+			OffsetToNextPointer: p.OffsetToNextPointer(),
+			DiversityData:       p.DiversityData(),
+			HasAddressDiversity: p.HasAddressDiversity(),
+			KeyName:             KeyNameV5(p.Key()),
+			Authenticated:       p.Authenticated(),
+		})
+	} else {
+		return json.Marshal(&struct {
+			Value               uint64 `json:"value"`
+			OffsetToNextPointer uint64 `json:"next"`
+		}{
+			Value:               p.Value(),
+			OffsetToNextPointer: p.OffsetToNextPointer(),
+		})
+	}
 }
 
 const (

@@ -32,6 +32,7 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/types"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/plist"
@@ -149,14 +150,16 @@ func patchMacho(m *macho.File, machoPath, action, loadCommand string, args []str
 				Path: args[3],
 			})
 		case "LC_BUILD_VERSION":
-			if len(args) < 8 {
-				return fmt.Errorf("not enough arguments for adding %s; must supply PLATFORM, MINOS, SDK strings and TOOL, TOOL_VERSION strings", loadCommand)
-			} else if len(args) > 8 {
-				return fmt.Errorf("too many arguments for adding %s; NOTE you can only add one tool", loadCommand)
+			if len(args) < 6 {
+				return fmt.Errorf("not enough arguments for modding %s; must supply at least PLATFORM, MINOS and SDK strings", loadCommand)
+			} else if len(args) > 6 {
+				if ((len(args) - 6) % 2) != 0 {
+					return fmt.Errorf("when adding tools to %s; ensure you supply both TOOL and TOOL_VERSION strings", loadCommand)
+				}
 			}
 			platform, err := types.GetPlatformByName(args[3])
 			if err != nil {
-				return fmt.Errorf("failed to parse tool name: %v", err)
+				return fmt.Errorf("failed to parse platform name %s: %v", args[3], err)
 			}
 			var minos types.Version
 			if err := minos.Set(args[4]); err != nil {
@@ -166,24 +169,30 @@ func patchMacho(m *macho.File, machoPath, action, loadCommand string, args []str
 			if err := sdk.Set(args[5]); err != nil {
 				return fmt.Errorf("failed to parse SDK version: %v", err)
 			}
-			tool, err := types.GetToolByName(args[6])
-			if err != nil {
-				return fmt.Errorf("failed to parse tool name: %v", err)
-			}
-			var toolVer types.Version
-			if err := toolVer.Set(args[7]); err != nil {
-				return fmt.Errorf("failed to parse tool version: %v", err)
+			var tools []types.BuildVersionTool
+			if len(args) > 6 {
+				for i := 6; i < len(args); i += 2 {
+					tool, err := types.GetToolByName(args[i])
+					if err != nil {
+						return fmt.Errorf("failed to parse tool name %s: %v", args[i], err)
+					}
+					var toolVer types.Version
+					if err := toolVer.Set(args[i+1]); err != nil {
+						return fmt.Errorf("failed to parse tool version %s: %v", args[i+1], err)
+					}
+					tools = append(tools, types.BuildVersionTool{Tool: tool, Version: toolVer})
+				}
 			}
 			m.AddLoad(&macho.BuildVersion{
 				BuildVersionCmd: types.BuildVersionCmd{
 					LoadCmd:  types.LC_BUILD_VERSION,
-					Len:      uint32(binary.Size(types.BuildVersionCmd{}) + binary.Size(types.BuildVersionTool{})),
+					Len:      uint32(binary.Size(types.BuildVersionCmd{}) + len(tools)*binary.Size(types.BuildVersionTool{})),
 					Platform: platform,
 					Minos:    minos,
 					Sdk:      sdk,
-					NumTools: 1,
+					NumTools: uint32(len(tools)),
 				},
-				Tools: []types.BuildVersionTool{{Tool: tool, Version: toolVer}},
+				Tools: tools,
 			})
 		case "LC_ID_DYLINKER", "LC_LOAD_DYLINKER", "LC_DYLD_ENVIRONMENT":
 			var lc types.LoadCmd
@@ -380,14 +389,16 @@ func patchMacho(m *macho.File, machoPath, action, loadCommand string, args []str
 				}
 			}
 		case "LC_BUILD_VERSION":
-			if len(args) < 8 {
-				return fmt.Errorf("not enough arguments for adding %s; must supply PLATFORM, MINOS, SDK strings and TOOL, TOOL_VERSION strings", loadCommand)
-			} else if len(args) > 8 {
-				return fmt.Errorf("too many arguments for adding %s; NOTE you can only add one tool to a %s", loadCommand, loadCommand)
+			if len(args) < 6 {
+				return fmt.Errorf("not enough arguments for modding %s; must supply at least PLATFORM, MINOS and SDK strings", loadCommand)
+			} else if len(args) > 6 {
+				if ((len(args) - 6) % 2) != 0 {
+					return fmt.Errorf("when adding tools to %s; ensure you supply both TOOL and TOOL_VERSION strings", loadCommand)
+				}
 			}
 			platform, err := types.GetPlatformByName(args[3])
 			if err != nil {
-				return fmt.Errorf("failed to parse tool name: %v", err)
+				return fmt.Errorf("failed to parse platform name %s: %v", args[3], err)
 			}
 			var minos types.Version
 			if err := minos.Set(args[4]); err != nil {
@@ -397,25 +408,31 @@ func patchMacho(m *macho.File, machoPath, action, loadCommand string, args []str
 			if err := sdk.Set(args[5]); err != nil {
 				return fmt.Errorf("failed to parse SDK version: %v", err)
 			}
-			tool, err := types.GetToolByName(args[6])
-			if err != nil {
-				return fmt.Errorf("failed to parse tool name: %v", err)
-			}
-			var toolVer types.Version
-			if err := toolVer.Set(args[7]); err != nil {
-				return fmt.Errorf("failed to parse tool version: %v", err)
+			var tools []types.BuildVersionTool
+			if len(args) > 6 {
+				for i := 6; i < len(args); i += 2 {
+					tool, err := types.GetToolByName(args[i])
+					if err != nil {
+						return fmt.Errorf("failed to parse tool name %s: %v", args[i], err)
+					}
+					var toolVer types.Version
+					if err := toolVer.Set(args[i+1]); err != nil {
+						return fmt.Errorf("failed to parse tool version %s: %v", args[i+1], err)
+					}
+					tools = append(tools, types.BuildVersionTool{Tool: tool, Version: toolVer})
+				}
 			}
 			lcbvs := m.GetLoadsByName(loadCommand)
 			if len(lcbvs) == 0 {
 				return fmt.Errorf("failed to find %s in %s", loadCommand, machoPath)
 			} else if len(lcbvs) == 1 {
 				prevLen := int32(lcbvs[0].(*macho.BuildVersion).Len)
-				lcbvs[0].(*macho.BuildVersion).Len = uint32(binary.Size(types.BuildVersionCmd{}) + binary.Size(types.BuildVersionTool{}))
+				lcbvs[0].(*macho.BuildVersion).Len = uint32(binary.Size(types.BuildVersionCmd{}) + len(tools)*binary.Size(types.BuildVersionTool{}))
 				lcbvs[0].(*macho.BuildVersion).Platform = platform
 				lcbvs[0].(*macho.BuildVersion).Minos = minos
 				lcbvs[0].(*macho.BuildVersion).Sdk = sdk
-				lcbvs[0].(*macho.BuildVersion).NumTools = 1
-				lcbvs[0].(*macho.BuildVersion).Tools = []types.BuildVersionTool{{Tool: tool, Version: toolVer}}
+				lcbvs[0].(*macho.BuildVersion).NumTools = uint32(len(tools))
+				lcbvs[0].(*macho.BuildVersion).Tools = tools
 				m.ModifySizeCommands(prevLen, int32(lcbvs[0].(*macho.BuildVersion).Len)) // should be 0
 			} else {
 				return fmt.Errorf("found more than one load command %s in %s", loadCommand, machoPath)
@@ -497,8 +514,10 @@ func patchMacho(m *macho.File, machoPath, action, loadCommand string, args []str
 func init() {
 	MachoCmd.AddCommand(machoPatchCmd)
 	machoPatchCmd.Flags().BoolP("overwrite", "f", false, "Overwrite file")
+	machoPatchCmd.Flags().BoolP("re-sign", "s", false, "Adhoc sign file")
 	machoPatchCmd.Flags().StringP("output", "o", "", "Output new file")
 	viper.BindPFlag("macho.patch.overwrite", machoPatchCmd.Flags().Lookup("overwrite"))
+	viper.BindPFlag("macho.patch.re-sign", machoPatchCmd.Flags().Lookup("re-sign"))
 	viper.BindPFlag("macho.patch.output", machoPatchCmd.Flags().Lookup("output"))
 }
 
@@ -535,6 +554,7 @@ var machoPatchCmd = &cobra.Command{
 
 		// flags
 		overwrite := viper.GetBool("macho.patch.overwrite")
+		reSign := viper.GetBool("macho.patch.re-sign")
 		output := viper.GetString("macho.patch.output")
 
 		var m *macho.File
@@ -610,7 +630,19 @@ var machoPatchCmd = &cobra.Command{
 			}
 		}
 
-		log.Warn("Code signature has been invalidated (MachO may need to be re-signed)")
+		yes := false
+		if !reSign {
+			log.Warn("Code signature has been invalidated (MachO may need to be re-signed)")
+			prompt := &survey.Confirm{
+				Message: fmt.Sprintf("Adhoc codesign %s?", output),
+				Default: false,
+			}
+			survey.AskOne(prompt, &yes)
+		}
+		if reSign || yes {
+			log.Infof("Adhoc signing MachO file: %s", output)
+			return mcmd.AdhocSign(output, output)
+		}
 
 		return nil
 	},

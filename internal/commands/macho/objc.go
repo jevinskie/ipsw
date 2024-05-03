@@ -10,11 +10,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"unicode"
 
 	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
+	"github.com/blacktop/go-macho/types"
 	"github.com/blacktop/go-macho/types/objc"
 	"github.com/blacktop/go-plist"
 	"github.com/blacktop/ipsw/internal/swift"
@@ -25,6 +25,8 @@ import (
 // ErrNoObjc is returned when a MachO does not contain objc info
 var ErrNoObjc = errors.New("macho does not contain objc info")
 
+var baseFrameworks = []string{"Foundation", "CoreFoundation", "libobjc.A.dylib"}
+
 // ObjcConfig for MachO ObjC parser
 type ObjcConfig struct {
 	Name     string
@@ -33,7 +35,7 @@ type ObjcConfig struct {
 	Headers  bool
 	ObjcRefs bool
 	Deps     bool
-	Demangle bool
+	Generic  bool
 
 	IpswVersion string
 
@@ -59,6 +61,13 @@ func (i *Imports) uniq(foundation map[string][]string) {
 	i.Locals = slices.Compact(i.Locals)
 	i.Classes = slices.Compact(i.Classes)
 	i.Protos = slices.Compact(i.Protos)
+	i.Imports = slices.DeleteFunc(i.Imports, func(l string) bool {
+		l = strings.TrimSuffix(l, "-Protocol.h")
+		l = strings.TrimSuffix(l, ".h")
+		_, foundC := slices.BinarySearch(foundation["classes"], l)
+		_, foundP := slices.BinarySearch(foundation["protocols"], l)
+		return foundC || foundP
+	})
 	i.Locals = slices.DeleteFunc(i.Locals, func(l string) bool {
 		l = strings.TrimSuffix(l, "-Protocol.h")
 		l = strings.TrimSuffix(l, ".h")
@@ -96,7 +105,7 @@ type ObjC struct {
 	cache *dyld.File
 	deps  []*macho.File
 
-	foundation map[string][]string
+	baseFWs map[string][]string
 }
 
 // NewObjC returns a new MachO ObjC parser instance
@@ -106,10 +115,10 @@ func NewObjC(file *macho.File, dsc *dyld.File, conf *ObjcConfig) (*ObjC, error) 
 	}
 
 	o := &ObjC{
-		conf:       conf,
-		file:       file,
-		cache:      dsc,
-		foundation: make(map[string][]string),
+		conf:    conf,
+		file:    file,
+		cache:   dsc,
+		baseFWs: make(map[string][]string),
 	}
 
 	if o.conf.Deps {
@@ -214,21 +223,23 @@ func (o *ObjC) DumpProtocol(pattern string) error {
 
 		for _, proto := range protos {
 			if re.MatchString(proto.Name) {
-				if o.conf.Color {
-					if o.conf.Addrs {
-						quick.Highlight(os.Stdout, swift.DemangleBlob(proto.WithAddrs()), "objc", "terminal256", o.conf.Theme)
+				if _, ok := seen[proto.Ptr]; !ok { // prevent displaying duplicates
+					if o.conf.Color {
+						if o.conf.Addrs {
+							quick.Highlight(os.Stdout, swift.DemangleBlob(proto.WithAddrs()), "objc", "terminal256", o.conf.Theme)
+						} else {
+							quick.Highlight(os.Stdout, swift.DemangleBlob(proto.Verbose()), "objc", "terminal256", o.conf.Theme)
+						}
+						quick.Highlight(os.Stdout, "\n/****************************************/\n\n", "objc", "terminal256", o.conf.Theme)
 					} else {
-						quick.Highlight(os.Stdout, swift.DemangleBlob(proto.Verbose()), "objc", "terminal256", o.conf.Theme)
+						if o.conf.Addrs {
+							fmt.Println(swift.DemangleBlob(proto.WithAddrs()))
+						} else {
+							fmt.Println(swift.DemangleBlob(proto.Verbose()))
+						}
 					}
-					quick.Highlight(os.Stdout, "\n/****************************************/\n\n", "objc", "terminal256", o.conf.Theme)
-				} else {
-					if o.conf.Addrs {
-						fmt.Println(swift.DemangleBlob(proto.WithAddrs()))
-					} else {
-						fmt.Println(swift.DemangleBlob(proto.Verbose()))
-					}
+					seen[proto.Ptr] = true
 				}
-				seen[proto.Ptr] = true
 			}
 		}
 	}
@@ -287,12 +298,12 @@ func (o *ObjC) Dump() error {
 		ms = append(ms, o.deps...)
 	}
 	for _, m := range ms {
-		if info, err := m.GetObjCImageInfo(); err == nil {
-			fmt.Println(info.Flags)
-		} else if !errors.Is(err, macho.ErrObjcSectionNotFound) {
-			return err
-		}
 		if o.conf.Verbose {
+			if info, err := m.GetObjCImageInfo(); err == nil {
+				fmt.Println(info.Flags)
+			} else if !errors.Is(err, macho.ErrObjcSectionNotFound) {
+				return err
+			}
 			fmt.Println(m.GetObjCToc())
 		}
 		/* ObjC Protocols */
@@ -455,7 +466,7 @@ func (o *ObjC) Dump() error {
 func (o *ObjC) Headers() error {
 
 	// scan DSC for Foundation/CoreFoundation classes and protocols
-	if err := o.scanFoundation(); err != nil {
+	if err := o.scanBaseFrameworks(); err != nil {
 		return err
 	}
 
@@ -540,8 +551,10 @@ func (o *ObjC) Headers() error {
 		})
 		seen := make(map[uint64]bool)
 		for _, proto := range protos {
-			if _, found := slices.BinarySearch(o.foundation["protocols"], proto.Name); found {
-				continue // skip Foundation protocols
+			if !slices.Contains(baseFrameworks, o.conf.Name) {
+				if _, found := slices.BinarySearch(o.baseFWs["protocols"], proto.Name); found {
+					continue // skip Foundation protocols
+				}
 			}
 			if _, ok := seen[proto.Ptr]; !ok { // prevent displaying duplicates
 				var props []string
@@ -566,7 +579,7 @@ func (o *ObjC) Headers() error {
 					BuildVersions: buildVersions,
 					SourceVersion: sourceVersion,
 					Name:          proto.Name + "_Protocol",
-					Imports:       imps[proto.Name],
+					Imports:       imps[proto.Name+"-Protocol"],
 					Object:        swift.DemangleBlob(proto.Verbose()),
 				}); err != nil {
 					return err
@@ -591,12 +604,18 @@ func (o *ObjC) Headers() error {
 			if cat.Class != nil && cat.Class.Name != "" {
 				fname = filepath.Join(o.conf.Output, o.conf.Name, cat.Class.Name+"+"+cat.Name+".h")
 			}
+			var name string
+			if cat.Class != nil && cat.Class.Name != "" {
+				name = cat.Class.Name + "_" + cat.Name
+			} else {
+				name = cat.Name
+			}
 			if err := writeHeader(&headerInfo{
 				FileName:      fname,
 				IpswVersion:   o.conf.IpswVersion,
 				BuildVersions: buildVersions,
 				SourceVersion: sourceVersion,
-				Name:          cat.Class.Name + "_" + cat.Name,
+				Name:          name,
 				Imports:       imps[cat.Name],
 				Object:        swift.DemangleBlob(cat.Verbose()),
 			}); err != nil {
@@ -680,31 +699,89 @@ type XCFrameworkLibraryInfoPlist struct {
 	DTSDKName                     string   `plist:"DTSDKName"`
 	DTXcode                       string   `plist:"DTXcode"`
 	DTXcodeBuild                  string   `plist:"DTXcodeBuild"`
-	LSMinimumSystemVersion        string   `plist:"LSMinimumSystemVersion"`
+	LSMinimumSystemVersion        string   `plist:"LSMinimumSystemVersion,omitempty"`
+	MinimumOSVersion              string   `plist:"MinimumOSVersion,omitempty"`
+	UIDeviceFamily                []uint64 `plist:"UIDeviceFamily,omitempty"`
+}
+
+type XCFrameworkConfig struct {
+	LibraryIdentifier        string
+	SupportedArchitectures   []string
+	SupportedPlatform        string
+	SupportedPlatformVariant string
+	CFBundleVersion          string
+	DTPlatformVersion        string
+	LSMinimumSystemVersion   string
 }
 
 // XCFramework outputs and XCFramework for a DSC dylib
 func (o *ObjC) XCFramework() error {
+	var xcfw XCFrameworkConfig
+
 	xcfolder := filepath.Join(o.conf.Output, o.conf.Name+".xcframework")
 	if err := os.MkdirAll(xcfolder, 0o750); err != nil {
-		return err
+		return fmt.Errorf("failed to create XCFramework folder: %w", err)
 	}
-	supported := "ios-arm64_x86_64-simulator"
+
+	image, err := o.cache.Image(o.conf.Name)
+	if err != nil {
+		return fmt.Errorf("failed to get image %s: %w", o.conf.Name, err)
+	}
+	m, err := image.GetMacho()
+	if err != nil {
+		return fmt.Errorf("failed to get macho from image %s: %w", o.conf.Name, err)
+	}
+
+	if bvs := m.BuildVersions(); len(bvs) == 0 { // TODO: support universal MachOs (with multiple architectures)
+		return fmt.Errorf("no build versions found in %s", o.conf.Name)
+	} else {
+		for _, bv := range bvs {
+			switch bv.Platform {
+			case types.Platform_iOsSimulator, types.Platform_tvOsSimulator, types.Platform_watchOsSimulator, types.Platform_visionOsSimulator:
+				xcfw.LibraryIdentifier += "_simulator"
+				xcfw.SupportedPlatformVariant = "simulator"
+			default:
+				xcfw.LibraryIdentifier += strings.ToLower(bv.Platform.String())
+				xcfw.SupportedPlatform = strings.ToLower(bv.Platform.String())
+				xcfw.DTPlatformVersion = bv.Sdk.String()
+				xcfw.LSMinimumSystemVersion = bv.Minos.String()
+				switch m.CPU {
+				case types.CPUAmd64:
+					xcfw.LibraryIdentifier += "_x86_64"
+					xcfw.SupportedArchitectures = append(xcfw.SupportedArchitectures, "x86_64")
+				case types.CPUArm64:
+					if m.SubCPU.String(m.CPU) == "arm64e" {
+						xcfw.LibraryIdentifier += "_arm64e"
+					} else {
+						xcfw.LibraryIdentifier += "_arm64"
+					}
+				}
+			}
+		}
+	}
+
+	if id := m.DylibID(); id != nil {
+		xcfw.CFBundleVersion = id.CurrentVersion.String()
+	}
+
 	/* generate XCFramework Info.plist */
 	f, err := os.Create(filepath.Join(xcfolder, "Info.plist"))
 	if err != nil {
 		return fmt.Errorf("failed to create %s: %w", filepath.Join(xcfolder, "Info.plist"), err)
 	}
 	defer f.Close()
-	if err := plist.NewEncoder(f).Encode(XCFrameworkInfoPlist{
+
+	enc := plist.NewEncoder(f)
+	enc.Indent("    ")
+	if err := enc.Encode(XCFrameworkInfoPlist{
 		AvailableLibraries: []XCFrameworkAvailableLibrary{
 			{
 				BinaryPath:               o.conf.Name + ".framework/" + o.conf.Name + ".tbd",
-				LibraryIdentifier:        supported,
+				LibraryIdentifier:        xcfw.LibraryIdentifier,
 				LibraryPath:              o.conf.Name + ".framework",
-				SupportedArchitectures:   []string{"arm64", "x86_64"},
-				SupportedPlatform:        "ios",
-				SupportedPlatformVariant: "simulator",
+				SupportedArchitectures:   xcfw.SupportedArchitectures,
+				SupportedPlatform:        xcfw.SupportedPlatform,
+				SupportedPlatformVariant: xcfw.SupportedPlatformVariant,
 			},
 		},
 		CFBundlePackageType:      "XFWK",
@@ -712,74 +789,88 @@ func (o *ObjC) XCFramework() error {
 	}); err != nil {
 		return fmt.Errorf("failed to create XCFramework Info.plist")
 	}
+
 	/* create folder structure */
-	fwfolder := filepath.Join(xcfolder, supported, o.conf.Name+".framework")
+	fwfolder := filepath.Join(xcfolder, xcfw.LibraryIdentifier, o.conf.Name+".framework")
 	if err := os.MkdirAll(filepath.Join(fwfolder, "Headers"), 0o750); err != nil {
-		return err
+		return fmt.Errorf("failed to create Headers folder: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(fwfolder, "Modules"), 0o750); err != nil {
-		return err
+		return fmt.Errorf("failed to create Modules folder: %w", err)
 	}
-	/* generate framework stub */
-	image, err := o.cache.Image(o.conf.Name)
-	if err != nil {
-		return err
+
+	/* generate framework tbd */
+	var reexports []string
+	if rexps := m.GetLoadsByName("LC_REEXPORT_DYLIB"); len(rexps) > 0 {
+		for _, rexp := range rexps {
+			reexports = append(reexports, rexp.(*macho.ReExportDylib).Name)
+		}
 	}
-	t, err := tbd.NewTBD(image, nil, false)
+	t, err := tbd.NewTBD(image, reexports, false, false)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create tbd: %w", err)
 	}
 	outTBD, err := t.Generate()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to generate tbd: %w", err)
 	}
+	outTBD += "...\n"
 	tbdFile := filepath.Join(fwfolder, o.conf.Name+".tbd")
 	if err = os.WriteFile(tbdFile, []byte(outTBD), 0o660); err != nil {
 		return fmt.Errorf("failed to write tbd file %s: %v", tbdFile, err)
 	}
+
 	/* generate modulemap */
 	if err := os.WriteFile(filepath.Join(fwfolder, "Modules", "module.modulemap"), []byte(fmt.Sprintf(
 		"module %s [system] {\n"+
-			"header \"Headers/%s.h\"\n"+ // NOTE: this SHOULD be the umbrella header
-			"export *\n"+
+			"    header \"Headers/%s.h\"\n"+ // NOTE: this SHOULD be the umbrella header
+			"    export *\n"+
 			"}\n", o.conf.Name, o.conf.Name,
 	)), 0o660); err != nil {
 		return fmt.Errorf("failed to write module.modulemap file: %v", err)
 	}
+
 	/* generate XCFramework Library Info.plist */
 	f2, err := os.Create(filepath.Join(fwfolder, "Info.plist"))
 	if err != nil {
 		return fmt.Errorf("failed to create %s: %w", filepath.Join(fwfolder, "Info.plist"), err)
 	}
 	defer f2.Close()
-	if err := plist.NewEncoder(f2).Encode(XCFrameworkLibraryInfoPlist{
-		BuildMachineOSBuild:           "23C52",
-		CFBundleDevelopmentRegion:     "English",
+	enc = plist.NewEncoder(f2)
+	enc.Indent("    ")
+	if err := enc.Encode(XCFrameworkLibraryInfoPlist{
+		BuildMachineOSBuild:           "23E224",
+		CFBundleDevelopmentRegion:     "en",
 		CFBundleExecutable:            o.conf.Name + ".tbd",
 		CFBundleIdentifier:            "com.apple." + strings.ToLower(o.conf.Name),
 		CFBundleInfoDictionaryVersion: "6.0",
-		CFBundleName:                  o.conf.Name + ".tbd",
+		CFBundleName:                  o.conf.Name,
 		CFBundlePackageType:           "FMWK",
-		CFBundleShortVersionString:    "2.1",
+		CFBundleShortVersionString:    "1.0",
 		CFBundleSignature:             "????",
-		CFBundleSupportedPlatforms:    []string{"MacOSX"},
-		CFBundleVersion:               "866.4",
+		CFBundleVersion:               xcfw.CFBundleVersion,
 		DTCompiler:                    "com.apple.compilers.llvm.clang.1_0",
+		CFBundleSupportedPlatforms:    []string{xcfw.SupportedPlatform}, // TODO: add variants (or universal dylib/macho support)
+		DTPlatformName:                xcfw.SupportedPlatform,
+		DTPlatformVersion:             xcfw.DTPlatformVersion,
 		DTPlatformBuild:               "",
-		DTPlatformName:                "macosx",
-		DTPlatformVersion:             "14.2",
-		DTSDKBuild:                    "23C52",
-		DTSDKName:                     "macosx14.2.internal",
+		DTSDKBuild:                    "23E224",
+		DTSDKName:                     fmt.Sprintf("%s%s.internal", xcfw.SupportedPlatform, xcfw.DTPlatformVersion),
 		DTXcode:                       "1500",
-		DTXcodeBuild:                  "15A6160m",
-		LSMinimumSystemVersion:        "14.2",
+		DTXcodeBuild:                  "15E6079e", // XCode 15.3
+		LSMinimumSystemVersion:        xcfw.LSMinimumSystemVersion,
 	}); err != nil {
 		return fmt.Errorf("failed to create XCFramework Info.plist")
 	}
+
 	/* generate Headers */
 	o.conf.Headers = true
 	o.conf.Output = filepath.Join(fwfolder, "Headers")
 	return o.Headers()
+}
+
+func (o *ObjC) SwiftPackage() error {
+	return fmt.Errorf("not implemented yet (coming soon)")
 }
 
 /* utils */
@@ -800,9 +891,9 @@ func writeHeader(hdr *headerInfo) error {
 		hdr.Name,
 		hdr.Name)
 	if !hdr.IsUmbrella {
-		out += fmt.Sprintf("@import Foundation;\n")
+		out += "@import Foundation;\n"
 	}
-	out += fmt.Sprintf("\n")
+	out += "\n"
 	if len(hdr.Imports.Imports) > 0 {
 		for _, imp := range hdr.Imports.Imports {
 			out += fmt.Sprintf("#include \"%s\"\n", imp)
@@ -814,7 +905,7 @@ func writeHeader(hdr *headerInfo) error {
 		}
 	}
 	if len(hdr.Imports.Imports) > 0 || len(hdr.Imports.Locals) > 0 {
-		out += fmt.Sprintf("\n")
+		out += "\n"
 	}
 	if len(hdr.Imports.Classes) > 0 {
 		out += fmt.Sprintf("@class %s;\n", strings.Join(hdr.Imports.Classes, ", "))
@@ -823,7 +914,7 @@ func writeHeader(hdr *headerInfo) error {
 		out += fmt.Sprintf("@protocol %s;\n", strings.Join(hdr.Imports.Protos, ", "))
 	}
 	if len(hdr.Imports.Classes) > 0 || len(hdr.Imports.Protos) > 0 {
-		out += fmt.Sprintf("\n")
+		out += "\n"
 	}
 	out += fmt.Sprintf("%s\n", hdr.Object)
 	out += fmt.Sprintf("#endif /* %s_h */\n", hdr.Name)
@@ -869,13 +960,16 @@ func (o *ObjC) processForwardDeclarations(m *macho.File) (map[string]Imports, er
 	})
 	for _, proto := range protos {
 		protoNames = append(protoNames, proto.Name)
-		//TODO: parse protocol properties and methods and add to imports etc
 	}
 
 	for _, class := range classes {
-		imp := Imports{}
-		if class.SuperClass != "NSObject" { // skip NSObject since we'll import Foundation by default
-			imp.Imports = append(imp.Imports, class.SuperClass+".h")
+		var imp Imports
+		if superClass := class.SuperClass; superClass != "" {
+			if slices.Contains(classNames, superClass) {
+				imp.Locals = append(imp.Locals, superClass+".h")
+			} else {
+				imp.Classes = append(imp.Classes, superClass)
+			}
 		}
 		for _, prot := range class.Protocols {
 			if slices.Contains(protoNames, prot.Name) {
@@ -885,77 +979,17 @@ func (o *ObjC) processForwardDeclarations(m *macho.File) (map[string]Imports, er
 			}
 		}
 		for _, ivar := range class.Ivars {
-			typ := ivar.Type
-			if strings.ContainsAny(typ, "<>") {
-				typ = strings.Trim(typ, "@\"")
-				if rest, ok := strings.CutPrefix(typ, "NSObject<"); ok {
-					typ = strings.TrimSuffix(rest, ">")
-					if slices.Contains(protoNames, typ) {
-						imp.Locals = append(imp.Locals, typ+"-Protocol.h")
-					} else {
-						imp.Protos = append(imp.Protos, typ)
-					}
-				}
-				typ = strings.Trim(typ, "<>")
-				if slices.Contains(protoNames, typ) {
-					imp.Locals = append(imp.Locals, typ+"-Protocol.h")
-				} else {
-					imp.Protos = append(imp.Protos, typ)
-				}
-
-			} else {
-				if rest, ok := strings.CutPrefix(typ, "@\""); ok {
-					typ = strings.TrimSuffix(rest, "\"")
-					if slices.Contains(classNames, typ) {
-						imp.Locals = append(imp.Locals, typ+".h")
-					} else {
-						imp.Classes = append(imp.Classes, typ)
-					}
-				}
-			}
+			typ, _ := strings.CutSuffix(ivar.Verbose(), ivar.Name+";")
+			o.fillImportsForType(typ, class.Name, "", classNames, protoNames, &imp)
 		}
 		for _, prop := range class.Props {
 			typ := prop.Type()
-			if strings.ContainsAny(typ, "<>") {
-				typ = strings.Trim(typ, "@\"")
-				typ = strings.Trim(typ, " *")
-				if rest, ok := strings.CutPrefix(typ, "NSObject<"); ok {
-					typ = strings.TrimSuffix(rest, ">")
-					if slices.Contains(protoNames, typ) {
-						imp.Locals = append(imp.Locals, typ+"-Protocol.h")
-					} else {
-						imp.Protos = append(imp.Protos, typ)
-					}
-				}
-				typ = strings.Trim(typ, "<>")
-				if slices.Contains(protoNames, typ) {
-					imp.Locals = append(imp.Locals, typ+"-Protocol.h")
-				} else {
-					imp.Protos = append(imp.Protos, typ)
-				}
-			} else {
-				if (len(typ) > 0 && unicode.IsUpper(rune(typ[0])) && unicode.IsLetter(rune(typ[0]))) && strings.HasSuffix(typ, "*") {
-					typ = strings.Trim(typ, " *")
-					if slices.Contains(classNames, typ) {
-						imp.Locals = append(imp.Locals, typ+".h")
-					} else {
-						imp.Classes = append(imp.Classes, typ)
-					}
-				}
-			}
+			o.fillImportsForType(typ, class.Name, "", classNames, protoNames, &imp)
 		}
 		for _, method := range class.InstanceMethods {
 			for i := 0; i < method.NumberOfArguments(); i++ {
 				typ := method.ArgumentType(i)
-				if (len(typ) > 0 && unicode.IsUpper(rune(typ[0])) && unicode.IsLetter(rune(typ[0]))) && strings.HasSuffix(typ, "*") { // or < >
-					if slices.Contains(classNames, typ) {
-						imp.Locals = append(imp.Locals, typ+".h")
-					} else if slices.Contains(protoNames, strings.Trim(typ, "NSObject<>")) {
-						imp.Locals = append(imp.Locals, strings.Trim(typ, "NSObject<>")+"-Protocol.h")
-					} else {
-						imp.Classes = append(imp.Classes, typ)
-					}
-				}
+				o.fillImportsForType(typ, class.Name, "", classNames, protoNames, &imp)
 				if i == 0 {
 					i += 2
 				}
@@ -964,30 +998,77 @@ func (o *ObjC) processForwardDeclarations(m *macho.File) (map[string]Imports, er
 		for _, method := range class.ClassMethods {
 			for i := 0; i < method.NumberOfArguments(); i++ {
 				typ := method.ArgumentType(i)
-				if (len(typ) > 0 && unicode.IsUpper(rune(typ[0])) && unicode.IsLetter(rune(typ[0]))) && strings.HasSuffix(typ, "*") { // or < >
-					if slices.Contains(classNames, typ) {
-						imp.Locals = append(imp.Locals, typ+".h")
-					} else {
-						imp.Classes = append(imp.Classes, typ)
-					}
-				}
+				o.fillImportsForType(typ, class.Name, "", classNames, protoNames, &imp)
 				if i == 0 {
 					i += 2
 				}
 			}
 		}
-		imp.uniq(o.foundation)
+		imp.uniq(o.baseFWs)
 		imps[class.Name] = imp
+	}
+
+	for _, proto := range protos {
+		var imp Imports
+		for _, prot := range proto.Prots {
+			if slices.Contains(protoNames, prot.Name) {
+				imp.Locals = append(imp.Locals, prot.Name+"-Protocol.h")
+			} else {
+				imp.Protos = append(imp.Protos, prot.Name)
+			}
+		}
+		for _, prop := range proto.InstanceProperties {
+			typ := prop.Type()
+			o.fillImportsForType(typ, "", proto.Name, classNames, protoNames, &imp)
+		}
+		for _, method := range proto.InstanceMethods {
+			for i := 0; i < method.NumberOfArguments(); i++ {
+				typ := method.ArgumentType(i)
+				o.fillImportsForType(typ, "", proto.Name, classNames, protoNames, &imp)
+				if i == 0 {
+					i += 2
+				}
+			}
+		}
+		for _, method := range proto.ClassMethods {
+			for i := 0; i < method.NumberOfArguments(); i++ {
+				typ := method.ArgumentType(i)
+				o.fillImportsForType(typ, "", proto.Name, classNames, protoNames, &imp)
+				if i == 0 {
+					i += 2
+				}
+			}
+		}
+		for _, method := range proto.OptionalInstanceMethods {
+			for i := 0; i < method.NumberOfArguments(); i++ {
+				typ := method.ArgumentType(i)
+				o.fillImportsForType(typ, "", proto.Name, classNames, protoNames, &imp)
+				if i == 0 {
+					i += 2
+				}
+			}
+		}
+		for _, method := range proto.OptionalClassMethods {
+			for i := 0; i < method.NumberOfArguments(); i++ {
+				typ := method.ArgumentType(i)
+				o.fillImportsForType(typ, "", proto.Name, classNames, protoNames, &imp)
+				if i == 0 {
+					i += 2
+				}
+			}
+		}
+		imp.uniq(o.baseFWs)
+		imps[proto.Name+"-Protocol"] = imp
 	}
 
 	return imps, nil
 }
 
-func (o *ObjC) scanFoundation() error {
-	o.foundation["classes"] = []string{}
-	o.foundation["protocols"] = []string{}
+func (o *ObjC) scanBaseFrameworks() error {
+	o.baseFWs["classes"] = []string{}
+	o.baseFWs["protocols"] = []string{}
 	if o.cache != nil {
-		for _, name := range []string{"Foundation", "CoreFoundation"} {
+		for _, name := range baseFrameworks {
 			img, err := o.cache.Image(name)
 			if err != nil {
 				return err
@@ -1007,7 +1088,7 @@ func (o *ObjC) scanFoundation() error {
 				return cmp.Compare(a.Name, b.Name)
 			})
 			for _, class := range classes {
-				o.foundation["classes"] = append(o.foundation["classes"], class.Name)
+				o.baseFWs["classes"] = append(o.baseFWs["classes"], class.Name)
 			}
 
 			protos, err := m.GetObjCProtocols()
@@ -1020,11 +1101,83 @@ func (o *ObjC) scanFoundation() error {
 				return cmp.Compare(a.Name, b.Name)
 			})
 			for _, proto := range protos {
-				o.foundation["protocols"] = append(o.foundation["protocols"], proto.Name)
+				o.baseFWs["protocols"] = append(o.baseFWs["protocols"], proto.Name)
 			}
-			slices.Sort(o.foundation["classes"])
-			slices.Sort(o.foundation["protocols"])
+			slices.Sort(o.baseFWs["classes"])
+			slices.Sort(o.baseFWs["protocols"])
 		}
 	}
 	return nil
+}
+
+func (o *ObjC) fillImportsForType(typ string, className string, protoName string, classNames []string, protoNames []string, imp *Imports) {
+	typ = strings.Trim(typ, ` *`)
+
+	if !strings.ContainsAny(typ, "<>") {
+		typ := o.nonBuiltInType(typ)
+		if typ == "" {
+			return
+		}
+
+		if !slices.Contains(classNames, typ) {
+			imp.Classes = append(imp.Classes, typ)
+			return
+		}
+
+		if typ != className {
+			imp.Locals = append(imp.Locals, typ+".h")
+			return
+		}
+
+		return
+	}
+
+	if !strings.HasPrefix(typ, "<") {
+		before, after, _ := strings.Cut(typ, "<")
+
+		o.fillImportsForType(before, className, protoName, classNames, protoNames, imp)
+		o.fillImportsForType("<"+after, className, protoName, classNames, protoNames, imp)
+
+		return
+	}
+
+	if !strings.HasSuffix(typ, ">") {
+		before, after, _ := strings.Cut(typ, ">")
+
+		o.fillImportsForType(before+">", className, protoName, classNames, protoNames, imp)
+		o.fillImportsForType(after, className, protoName, classNames, protoNames, imp)
+
+		return
+	}
+
+	for _, typ := range strings.Split(strings.Trim(typ, "<>"), ", ") {
+		if !slices.Contains(protoNames, typ) {
+			imp.Protos = append(imp.Protos, typ)
+			continue
+		}
+
+		if typ != protoName {
+			imp.Locals = append(imp.Locals, typ+"-Protocol.h")
+		}
+	}
+}
+
+func (o *ObjC) nonBuiltInType(typ string) string {
+	if typ == "" {
+		return ""
+	}
+
+	if strings.ContainsAny(typ, "()[]{};") {
+		return ""
+	}
+
+	switch before, after, _ := strings.Cut(typ, " "); before {
+	case "_Bool", "_Complex", "_Imaginary", "BOOL", "Class", "IMP", "Ivar", "Method", "SEL", "bool", "char", "class", "double", "enum", "float", "id", "int", "long", "short", "signed", "struct", "union", "unsigned", "void":
+		return ""
+
+	case "_Atomic", "bycopy", "byref", "const", "in", "inout", "oneway", "out", "restrict", "volatile":
+		return o.nonBuiltInType(after)
+	}
+
+	return typ
 }

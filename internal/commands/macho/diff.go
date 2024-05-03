@@ -13,17 +13,18 @@ type DiffConfig struct {
 	Markdown bool
 	Color    bool
 	DiffTool string
+	Filter   []string
 }
 
 type MachoDiff struct {
-	New     []string
-	Removed []string
-	Updated map[string]string
+	New     []string          `json:"new,omitempty"`
+	Removed []string          `json:"removed,omitempty"`
+	Updated map[string]string `json:"updated,omitempty"`
 }
 
 type section struct {
-	Name string
-	Size uint64
+	Name string `json:"name,omitempty"`
+	Size uint64 `json:"size,omitempty"`
 }
 
 type DiffInfo struct {
@@ -34,9 +35,14 @@ type DiffInfo struct {
 	Functions int
 }
 
-func GenerateDiffInfo(m *macho.File) *DiffInfo {
+func GenerateDiffInfo(m *macho.File, conf *DiffConfig) *DiffInfo {
 	var secs []section
 	for _, s := range m.Sections {
+		if len(conf.Filter) > 0 {
+			if !slices.Contains(conf.Filter, s.Seg+"."+s.Name) {
+				continue
+			}
+		}
 		secs = append(secs, section{
 			Name: s.Seg + "." + s.Name,
 			Size: s.Size,
@@ -65,9 +71,6 @@ func GenerateDiffInfo(m *macho.File) *DiffInfo {
 
 // Equal checks if two Info structs are equal
 func (i DiffInfo) Equal(x DiffInfo) bool {
-	if i.Version == x.Version {
-		return true
-	}
 	if len(i.Imports) != len(x.Imports) {
 		return false
 	}
@@ -90,6 +93,9 @@ func (i DiffInfo) Equal(x DiffInfo) bool {
 	if i.Functions != x.Functions {
 		return false
 	}
+	// if i.Version != x.Version { (this could be a lie)
+	// 	return false
+	// }
 	return true
 }
 
@@ -118,7 +124,7 @@ func DiffIPSW(oldIPSW, newIPSW string, conf *DiffConfig) (*MachoDiff, error) {
 	prev := make(map[string]*DiffInfo)
 
 	if err := search.ForEachMachoInIPSW(oldIPSW, func(path string, m *macho.File) error {
-		prev[path] = GenerateDiffInfo(m)
+		prev[path] = GenerateDiffInfo(m, conf)
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("failed to parse machos in 'Old' IPSW: %v", err)
@@ -135,7 +141,86 @@ func DiffIPSW(oldIPSW, newIPSW string, conf *DiffConfig) (*MachoDiff, error) {
 	next := make(map[string]*DiffInfo)
 
 	if err := search.ForEachMachoInIPSW(newIPSW, func(path string, m *macho.File) error {
-		next[path] = GenerateDiffInfo(m)
+		next[path] = GenerateDiffInfo(m, conf)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to parse machos in 'Old' IPSW: %v", err)
+	}
+
+	var nextFiles []string
+	for f := range next {
+		nextFiles = append(nextFiles, f)
+	}
+	slices.Sort(nextFiles)
+
+	/* DIFF IPSW */
+	diff.New = utils.Difference(nextFiles, prevFiles)
+	diff.Removed = utils.Difference(prevFiles, nextFiles)
+	// gc
+	prevFiles = []string{}
+
+	var err error
+	for _, f2 := range nextFiles {
+		dat2 := next[f2]
+		if dat1, ok := prev[f2]; ok {
+			if dat2.Equal(*dat1) {
+				continue
+			}
+			var out string
+			if conf.Markdown {
+				out, err = utils.GitDiff(dat1.String()+"\n", dat2.String()+"\n", &utils.GitDiffConfig{Color: conf.Color, Tool: conf.DiffTool})
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				out, err = utils.GitDiff(dat1.String()+"\n", dat2.String()+"\n", &utils.GitDiffConfig{Color: conf.Color, Tool: conf.DiffTool})
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(out) == 0 { // no diff
+				continue
+			}
+			if conf.Markdown {
+				diff.Updated[f2] = "```diff\n" + out + "\n```\n"
+			} else {
+				diff.Updated[f2] = out
+			}
+		}
+	}
+
+	return diff, nil
+}
+
+// DiffFirmwares diffs two IPSW's im4p firmware MachOs
+func DiffFirmwares(oldIPSW, newIPSW string, conf *DiffConfig) (*MachoDiff, error) {
+	diff := &MachoDiff{
+		Updated: make(map[string]string),
+	}
+
+	/* PREVIOUS IPSW */
+
+	prev := make(map[string]*DiffInfo)
+
+	if err := search.ForEachIm4pInIPSW(oldIPSW, func(path string, m *macho.File) error {
+		prev[path] = GenerateDiffInfo(m, conf)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to parse machos in 'Old' IPSW: %v", err)
+	}
+
+	var prevFiles []string
+	for f := range prev {
+		prevFiles = append(prevFiles, f)
+	}
+	slices.Sort(prevFiles)
+
+	/* NEXT IPSW */
+
+	next := make(map[string]*DiffInfo)
+
+	if err := search.ForEachIm4pInIPSW(newIPSW, func(path string, m *macho.File) error {
+		next[path] = GenerateDiffInfo(m, conf)
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("failed to parse machos in 'Old' IPSW: %v", err)

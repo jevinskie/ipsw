@@ -1,7 +1,5 @@
-//go:build sandbox && cgo
-
 /*
-Copyright © 2023 blacktop
+Copyright © 2024 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,66 +19,41 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-package sb
+package fw
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-
 	"github.com/apex/log"
-	"github.com/blacktop/ipsw/pkg/sandbox/compile"
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 func init() {
-	SbCmd.AddCommand(cmplCmd)
-	cmplCmd.Flags().StringP("output", "o", "", "Folder to save profile.bin to")
-	cmplCmd.MarkFlagDirname("output")
+	FwCmd.AddCommand(lpmCmd)
+
+	lpmCmd.Flags().StringP("output", "o", "", "Folder to extract files to")
+	lpmCmd.MarkFlagDirname("output")
+	viper.BindPFlag("fw.ane.output", lpmCmd.Flags().Lookup("output"))
 }
 
-// cmplCmd represents the cmpl command
-var cmplCmd = &cobra.Command{
-	Use:           "cmpl",
-	Short:         "Compile a sandbox profile",
-	Args:          cobra.ExactArgs(1),
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	Hidden:        true,
+// lpmCmd represents the ane command
+var lpmCmd = &cobra.Command{
+	Use:     "lpm",
+	Aliases: []string{"l"},
+	Short:   "🚧 Dump MachOs",
+	Hidden:  true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
 			log.SetLevel(log.DebugLevel)
 		}
-		color.NoColor = viper.GetBool("no-color")
 
-		output, _ := cmd.Flags().GetString("output")
+		// Firmware/AppleLPM/AppleLPM.d84.release.im4p
 
-		sbProfile := filepath.Clean(args[0])
+		// flags
+		// output := viper.GetString("fw.ane.output")
 
-		f, err := os.Open(sbProfile)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
+		panic("not implemented")
 
-		profile, err := compile.Do(f)
-		if err != nil {
-			return fmt.Errorf("failed to compile profile %s: %w", sbProfile, err)
-		}
-
-		if len(output) > 0 {
-			if err := os.MkdirAll(output, 0755); err != nil {
-				return err
-			}
-			output = filepath.Join(output, "profile.bin")
-		} else {
-			output = "profile.bin"
-		}
-
-		log.Infof("Compiling profile to %s", output)
-		return os.WriteFile(output, profile, 0644)
+		return nil
 	},
 }
