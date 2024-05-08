@@ -718,7 +718,7 @@ type XCFrameworkConfig struct {
 func (o *ObjC) XCFramework() error {
 	var xcfw XCFrameworkConfig
 
-	xcfolder := filepath.Join(o.conf.Output, o.conf.Name+".xcframework")
+	xcfolder := filepath.Join(o.conf.Output, filepath.Base(o.conf.Name)+".xcframework")
 	if err := os.MkdirAll(xcfolder, 0o750); err != nil {
 		return fmt.Errorf("failed to create XCFramework folder: %w", err)
 	}
@@ -731,6 +731,7 @@ func (o *ObjC) XCFramework() error {
 	if err != nil {
 		return fmt.Errorf("failed to get macho from image %s: %w", o.conf.Name, err)
 	}
+	o.conf.Name = filepath.Base(o.conf.Name)
 
 	if bvs := m.BuildVersions(); len(bvs) == 0 { // TODO: support universal MachOs (with multiple architectures)
 		return fmt.Errorf("no build versions found in %s", o.conf.Name)

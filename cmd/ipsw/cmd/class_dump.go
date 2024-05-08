@@ -229,7 +229,8 @@ var classDumpCmd = &cobra.Command{
 				return fmt.Errorf("failed to parse MachO from dylib: %v", err)
 			}
 
-			conf.Name = filepath.Base(img.Name)
+			// conf.Name = filepath.Base(img.Name)
+			conf.Name = img.Name
 
 			o, err = mcmd.NewObjC(m, f, &conf)
 			if err != nil {
