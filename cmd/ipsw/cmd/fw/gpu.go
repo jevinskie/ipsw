@@ -44,6 +44,7 @@ var gpuCmd = &cobra.Command{
 	Use:     "gpu",
 	Aliases: []string{"agx"},
 	Short:   "Dump MachOs",
+	Args:    cobra.ExactArgs(1),
 	Hidden:  true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 

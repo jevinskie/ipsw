@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/demangle"
 	"github.com/blacktop/ipsw/pkg/crashlog"
@@ -39,10 +40,16 @@ import (
 func init() {
 	rootCmd.AddCommand(symbolicateCmd)
 
+	symbolicateCmd.Flags().BoolP("all", "a", false, "Show all threads in crashlog")
+	symbolicateCmd.Flags().BoolP("running", "r", false, "Show all running (TH_RUN) threads in crashlog")
 	symbolicateCmd.Flags().BoolP("unslide", "u", false, "Unslide the crashlog for easier static analysis")
 	symbolicateCmd.Flags().BoolP("demangle", "d", false, "Demangle symbol names")
 	// symbolicateCmd.Flags().String("cache", "", "Path to .a2s addr to sym cache file (speeds up analysis)")
 	symbolicateCmd.MarkZshCompPositionalArgumentFile(2, "dyld_shared_cache*")
+	viper.BindPFlag("symbolicate.all", symbolicateCmd.Flags().Lookup("all"))
+	viper.BindPFlag("symbolicate.running", symbolicateCmd.Flags().Lookup("running"))
+	viper.BindPFlag("symbolicate.unslide", symbolicateCmd.Flags().Lookup("unslide"))
+	viper.BindPFlag("symbolicate.demangle", symbolicateCmd.Flags().Lookup("demangle"))
 }
 
 // TODO: handle all edge cases from `/Applications/Xcode.app/Contents/SharedFrameworks/DVTFoundation.framework/Versions/A/Resources/symbolicatecrash` and handle spindumps etc
@@ -53,6 +60,14 @@ var symbolicateCmd = &cobra.Command{
 	Aliases: []string{"sym"},
 	Short:   "Symbolicate ARM 64-bit crash logs (similar to Apple's symbolicatecrash)",
 	Args:    cobra.MinimumNArgs(1),
+	Example: heredoc.Doc(`
+		# Symbolicate a panic crashlog (BugType=210) with an IPSW
+		  ❯ ipsw symbolicate panic-full-2024-03-21-004704.000.ips iPad_Pro_HFR_17.4_21E219_Restore.ipsw
+		# Pretty print a crashlog (BugType=309) these are usually symbolicated by the OS
+		  ❯ ipsw symbolicate --color Delta-2024-04-20-135807.ips
+		# Symbolicate a (old stype) crashlog (BugType=109) requiring a dyld_shared_cache to symbolicate
+		  ❯ ipsw symbolicate Delta-2024-04-20-135807.ips
+		    ⨯ please supply a dyld_shared_cache for iPhone13,3 running 14.5 (18E5154f)`),
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if Verbose {
@@ -60,9 +75,11 @@ var symbolicateCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		unslide, _ := cmd.Flags().GetBool("unslide")
+		all := viper.GetBool("symbolicate.all")
+		running := viper.GetBool("symbolicate.running")
+		unslide := viper.GetBool("symbolicate.unslide")
 		// cacheFile, _ := cmd.Flags().GetString("cache")
-		demangleFlag, _ := cmd.Flags().GetBool("demangle")
+		demangleFlag := viper.GetBool("symbolicate.demangle")
 
 		hdr, err := crashlog.ParseHeader(args[0])
 		if err != nil {
@@ -75,7 +92,12 @@ var symbolicateCmd = &cobra.Command{
 
 		switch hdr.BugType {
 		case "210", "309": // NEW JSON STYLE CRASHLOG
-			ips, err := crashlog.OpenIPS(args[0])
+			ips, err := crashlog.OpenIPS(args[0], &crashlog.Config{
+				All:      all || Verbose,
+				Running:  running,
+				Unslid:   unslide,
+				Demangle: demangleFlag,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to parse IPS file: %v", err)
 			}
@@ -90,7 +112,7 @@ var symbolicateCmd = &cobra.Command{
 				}
 			}
 
-			fmt.Println(ips.String(Verbose))
+			fmt.Println(ips)
 		case "109": // OLD STYLE CRASHLOG
 			crashLog, err := crashlog.Open(args[0])
 			if err != nil {

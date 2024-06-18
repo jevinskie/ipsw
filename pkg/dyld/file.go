@@ -82,6 +82,7 @@ type File struct {
 	IsDyld4         bool
 	symCacheLoaded  bool
 	SubCacheInfo    []SubcacheEntry
+	TPROMappings    []TPROMapping
 	symUUID         mtypes.UUID
 	dyldImageAddr   uint64
 	dyldStartFnAddr uint64
@@ -391,6 +392,8 @@ func (f *File) parseCache(r io.ReaderAt, uuid mtypes.UUID) error {
 			} else if cxmInfo.MaxProt.Write() {
 				if cm.Flags.IsAuthData() {
 					cm.Name = "__AUTH"
+				} else if cm.Flags.IsTPRO() {
+					cm.Name = "__TPRO"
 				} else {
 					cm.Name = "__DATA"
 				}
@@ -635,8 +638,7 @@ func (f *File) parseCache(r io.ReaderAt, uuid mtypes.UUID) error {
 		sr.Seek(int64(f.Headers[uuid].SubCacheArrayOffset), io.SeekStart)
 		f.SubCacheInfo = make([]SubcacheEntry, f.Headers[uuid].SubCacheArrayCount)
 		// TODO: gross hack to read the subcache info for pre iOS 16.
-		endOfSubCacheInfoArray := f.Headers[f.UUID].SubCacheArrayOffset + uint32(binary.Size(subcacheEntry{})*int(f.Headers[f.UUID].SubCacheArrayCount))
-		if endOfSubCacheInfoArray == f.Images[0].PathOffset {
+		if f.Headers[f.UUID].MappingOffset >= 0x200 {
 			subCacheInfo := make([]subcacheEntry, f.Headers[uuid].SubCacheArrayCount)
 			if err := binary.Read(sr, f.ByteOrder, subCacheInfo); err != nil {
 				return err
@@ -655,6 +657,15 @@ func (f *File) parseCache(r io.ReaderAt, uuid mtypes.UUID) error {
 				f.SubCacheInfo[idx].UUID = scinfo.UUID
 				f.SubCacheInfo[idx].CacheVMOffset = scinfo.CacheVMOffset
 			}
+		}
+	}
+
+	if f.Headers[uuid].MappingOffset >= 0x208 {
+		// read TPRO mapping info
+		sr.Seek(int64(f.Headers[uuid].TPROMappingOffset), io.SeekStart)
+		f.TPROMappings = make([]TPROMapping, f.Headers[uuid].TPROMappingCount)
+		if err := binary.Read(sr, f.ByteOrder, f.TPROMappings); err != nil {
+			return fmt.Errorf("failed to read DSC TPRO mappings (new in iOS18.0beta1): %v", err)
 		}
 	}
 

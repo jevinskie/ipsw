@@ -191,6 +191,8 @@ type CacheHeader struct {
 	CacheAtlasSize                uint64         // size of embedded cache atlas
 	DynamicDataOffset             uint64         // VM offset from cache_header* to the location of dyld_cache_dynamic_data_header
 	DynamicDataMaxSize            uint64         // maximum size of space reserved from dynamic data
+	TPROMappingOffset             uint32         // file offset to TPRO mappings  NEW in iOS 18.0 beta1 (hi mrmacete :P)
+	TPROMappingCount              uint32         // TPRO mappings count           NEW in iOS 18.0 beta1 (is 1 for now; protects OBJC_RO)
 }
 
 type CacheMappingInfo struct {
@@ -210,6 +212,8 @@ const (
 	DYLD_CACHE_MAPPING_CONST_DATA  CacheMappingFlag = 1 << 2
 	DYLD_CACHE_MAPPING_TEXT_STUBS  CacheMappingFlag = 1 << 3
 	DYLD_CACHE_DYNAMIC_CONFIG_DATA CacheMappingFlag = 1 << 4
+	DYLD_CACHE_MAPPING_UNKNOWN     CacheMappingFlag = 1 << 5
+	DYLD_CACHE_MAPPING_TPRO        CacheMappingFlag = 1 << 6
 )
 
 func (f CacheMappingFlag) IsNone() bool {
@@ -229,6 +233,40 @@ func (f CacheMappingFlag) IsTextStubs() bool {
 }
 func (f CacheMappingFlag) IsConfigData() bool {
 	return (f & DYLD_CACHE_DYNAMIC_CONFIG_DATA) != 0
+}
+func (f CacheMappingFlag) IsUnknown() bool {
+	return (f & DYLD_CACHE_MAPPING_UNKNOWN) != 0
+}
+func (f CacheMappingFlag) IsTPRO() bool {
+	return (f & DYLD_CACHE_MAPPING_TPRO) != 0
+}
+func (f CacheMappingFlag) String() string {
+	var fStr []string
+	if f.IsAuthData() {
+		fStr = append(fStr, "AUTH_DATA")
+	}
+	if f.IsDirtyData() {
+		fStr = append(fStr, "DIRTY_DATA")
+	}
+	if f.IsTPRO() {
+		fStr = append(fStr, "TPRO")
+	}
+	if f.IsConstData() {
+		fStr = append(fStr, "CONST_DATA")
+	}
+	if f.IsTextStubs() {
+		fStr = append(fStr, "TEXT_STUBS")
+	}
+	if f.IsConfigData() {
+		fStr = append(fStr, "CONFIG_DATA")
+	}
+	if f.IsUnknown() {
+		fStr = append(fStr, "UNKNOWN")
+	}
+	if len(fStr) > 0 {
+		return strings.Join(fStr, " | ")
+	}
+	return ""
 }
 
 type CacheMappingAndSlideInfo struct {
@@ -324,6 +362,11 @@ func (i CacheSlideInfo2) GetPageSize() uint32 {
 	return i.PageSize
 }
 func (i CacheSlideInfo2) SlidePointer(ptr uint64) uint64 {
+	shift := uint64(bits.Len64(i.ValueAdd))
+	mask := uint64(1<<64-1) >> shift << shift
+	if ptr > i.ValueAdd && (ptr&mask) == 0 {
+		return ptr
+	}
 	if (ptr & ^i.DeltaMask) != 0 {
 		return (ptr & ^i.DeltaMask) + i.ValueAdd
 	}
@@ -353,6 +396,11 @@ func (i CacheSlideInfo3) GetPageSize() uint32 {
 	return i.PageSize
 }
 func (i CacheSlideInfo3) SlidePointer(ptr uint64) uint64 {
+	if ptr == 0 {
+		return 0
+	} else if (ptr & 0xFFF8_0000_0000_0000) == 0 {
+		return ptr
+	}
 	pointer := CacheSlidePointer3(ptr)
 	if pointer.Authenticated() {
 		return i.AuthValueAdd + pointer.OffsetFromSharedCacheBase()
@@ -504,8 +552,10 @@ func (i CacheSlideInfo4) GetPageSize() uint32 {
 	return i.PageSize
 }
 func (i CacheSlideInfo4) SlidePointer(ptr uint64) uint64 {
+	// if ptr > i.ValueAdd { FIXME: do I need to add this ?
+	// 	return ptr
+	// }
 	value := ptr & ^i.DeltaMask
-
 	if (value & 0xFFFF8000) == 0 {
 		// small positive non-pointer, use as-is
 	} else if (value & 0x3FFF8000) == 0x3FFF8000 {
@@ -1141,6 +1191,11 @@ type subcacheEntry struct {
 	UUID          types.UUID
 	CacheVMOffset uint64
 	FileSuffix    [32]byte
+}
+
+type TPROMapping struct {
+	Addr uint64
+	Size uint64
 }
 
 // This struct is a small piece of dynamic data that can be included in the shared region, and contains configuration

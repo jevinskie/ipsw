@@ -64,6 +64,9 @@ const (
 	macRsrUpdate             assetType = "com.apple.MobileAsset.MacSplatSoftwareUpdate"
 	recoveryOsSoftwareUpdate assetType = "com.apple.MobileAsset.SFRSoftwareUpdate"
 	accessorySoftwareUpdate  assetType = "com.apple.MobileAsset.DarwinAccessoryUpdate.A2525"
+	// XCode Simulator
+	iOsSimulatorUpdate     assetType = "com.apple.MobileAsset.iOSSimulatorRuntime"
+	watchOsSimulatorUpdate assetType = "com.apple.MobileAsset.watchOSSimulatorRuntime"
 )
 
 // Ota is an OTA object
@@ -112,6 +115,7 @@ type pallasRequest struct {
 
 type ota struct {
 	AssetSetID      string          `plist:"AssetSetId,omitempty" json:"AssetSetId,omitempty"`
+	AssetAudience   string          `plist:"AssetAudience,omitempty" json:"AssetAudience,omitempty"`
 	Assets          []types.Asset   `plist:"Assets,omitempty" json:"Assets,omitempty"`
 	Certificate     []byte          `plist:"Certificate,omitempty"`
 	Signature       []byte          `plist:"Signature,omitempty"`

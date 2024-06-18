@@ -322,7 +322,7 @@ var MachoCmd = &cobra.Command{
 							return fmt.Errorf("failed to dump swift data: %v", err)
 						}
 					} else {
-						fmt.Println("  - no swift")
+						fmt.Print("  - no swift")
 					}
 					println()
 				}

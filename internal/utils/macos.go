@@ -18,6 +18,7 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-plist"
 	"github.com/blacktop/ipsw/internal/utils/lsof"
+	"github.com/blacktop/ipsw/pkg/aea"
 	semver "github.com/hashicorp/go-version"
 )
 
@@ -599,6 +600,15 @@ func ExtractFromDMG(ipswPath, dmgPath, destPath string, pattern *regexp.Regexp) 
 			return nil, fmt.Errorf("failed to find %s in IPSW", dmgPath)
 		}
 		defer os.Remove(filepath.Clean(dmgs[0]))
+	}
+
+	if filepath.Ext(dmgPath) == ".aea" {
+		var err error
+		dmgPath, err = aea.Decrypt(dmgPath, filepath.Dir(dmgPath), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
+		}
+		defer os.Remove(dmgPath)
 	}
 
 	Indent(log.Info, 2)(fmt.Sprintf("Mounting DMG %s", dmgPath))

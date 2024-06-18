@@ -18,6 +18,7 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
 	"github.com/blacktop/ipsw/internal/utils"
+	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/fatih/color"
 )
@@ -72,6 +73,16 @@ func GetDatabase(conf *Config) (map[string]string, error) {
 				utils.Indent(log.Info, 3)("Scanning filesystem")
 				if ents, err := scanEnts(conf.IPSW, fsOS, "filesystem"); err != nil {
 					return nil, fmt.Errorf("failed to scan files in filesystem %s: %v", fsOS, err)
+				} else {
+					for k, v := range ents {
+						entDB[k] = v
+					}
+				}
+			}
+			if excOS, err := i.GetExclaveOSDmg(); err == nil {
+				utils.Indent(log.Info, 3)("Scanning filesystem")
+				if ents, err := scanEnts(conf.IPSW, excOS, "ExclaveOS"); err != nil {
+					return nil, fmt.Errorf("failed to scan files in ExclaveOS %s: %v", excOS, err)
 				} else {
 					for k, v := range ents {
 						entDB[k] = v
@@ -257,6 +268,15 @@ func scanEnts(ipswPath, dmgPath, dmgType string) (map[string]string, error) {
 		defer os.Remove(dmgs[0])
 	} else {
 		utils.Indent(log.Debug, 2)(fmt.Sprintf("Found extracted %s", dmgPath))
+	}
+
+	if filepath.Ext(dmgPath) == ".aea" {
+		var err error
+		dmgPath, err = aea.Decrypt(dmgPath, filepath.Dir(dmgPath), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
+		}
+		defer os.Remove(dmgPath)
 	}
 
 	utils.Indent(log.Debug, 2)(fmt.Sprintf("Mounting %s %s", dmgType, dmgPath))

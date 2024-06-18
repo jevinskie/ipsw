@@ -16,11 +16,15 @@ import (
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/utils"
+	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/blacktop/ipsw/pkg/ota/ridiff"
-	"github.com/vbauerster/mpb/v7"
-	"github.com/vbauerster/mpb/v7/decor"
+	"github.com/pkg/errors"
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
 )
+
+var ErrNoCryptex = errors.New("cryptex-system-arm64e NOT found in remote zip")
 
 func GetDscPathsInMount(mountPoint string, driverKit bool) ([]string, error) {
 	var matches []string
@@ -181,6 +185,13 @@ func Extract(ipsw, destPath string, arches []string, driverkit bool) ([]string, 
 		defer os.Remove(dmgs[0])
 	}
 
+	if filepath.Ext(dmgPath) == ".aea" {
+		dmgPath, err = aea.Decrypt(dmgPath, filepath.Dir(dmgPath), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
+		}
+	}
+
 	return ExtractFromDMG(i, dmgPath, destPath, arches, driverkit)
 }
 
@@ -212,7 +223,7 @@ func ExtractFromRemoteCryptex(zr *zip.Reader, destPath string, arches []string, 
 				mpb.AppendDecorators(
 					decor.OnComplete(decor.AverageETA(decor.ET_STYLE_GO), "✅ "),
 					decor.Name(" ] "),
-					decor.AverageSpeed(decor.UnitKiB, "% .2f"),
+					decor.AverageSpeed(decor.SizeB1024(0), "% .2f", decor.WCSyncWidth),
 				),
 			)
 			// create proxy reader
@@ -258,5 +269,5 @@ func ExtractFromRemoteCryptex(zr *zip.Reader, destPath string, arches []string, 
 		}
 	}
 
-	return nil, fmt.Errorf("cryptex-system-arm64e NOT found in remote zip")
+	return nil, ErrNoCryptex
 }

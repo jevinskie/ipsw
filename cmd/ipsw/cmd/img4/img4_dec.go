@@ -25,6 +25,7 @@ import (
 	"crypto/aes"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 
 	"github.com/apex/log"
 	icmd "github.com/blacktop/ipsw/internal/commands/img4"
@@ -35,20 +36,25 @@ import (
 )
 
 func init() {
-	Img4Cmd.AddCommand(decImg4Cmd)
+	Img4Cmd.AddCommand(img4DecCmd)
 
-	decImg4Cmd.PersistentFlags().String("iv-key", "", "AES iv+key")
-	decImg4Cmd.PersistentFlags().StringP("iv", "i", "", "AES iv")
-	decImg4Cmd.PersistentFlags().StringP("key", "k", "", "AES key")
-	decImg4Cmd.PersistentFlags().StringP("output", "o", "", "Output file")
+	img4DecCmd.Flags().String("iv-key", "", "AES iv+key")
+	img4DecCmd.Flags().StringP("iv", "i", "", "AES iv")
+	img4DecCmd.Flags().StringP("key", "k", "", "AES key")
+	img4DecCmd.Flags().StringP("output", "o", "", "Output folder")
+	img4DecCmd.MarkFlagDirname("output")
+	viper.BindPFlag("img4.dec.iv-key", img4DecCmd.Flags().Lookup("iv-key"))
+	viper.BindPFlag("img4.dec.iv", img4DecCmd.Flags().Lookup("iv"))
+	viper.BindPFlag("img4.dec.key", img4DecCmd.Flags().Lookup("key"))
+	viper.BindPFlag("img4.dec.output", img4DecCmd.Flags().Lookup("output"))
 }
 
 // decCmd represents the dec command
-var decImg4Cmd = &cobra.Command{
+var img4DecCmd = &cobra.Command{
 	Use:     "dec <img4>",
 	Aliases: []string{"d"},
 	Short:   "Decrypt img4 payloads",
-	Args:    cobra.MinimumNArgs(1),
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
@@ -57,15 +63,22 @@ var decImg4Cmd = &cobra.Command{
 		color.NoColor = viper.GetBool("no-color")
 
 		// flags
-		outputFile, _ := cmd.Flags().GetString("output")
-		ivkeyStr, _ := cmd.Flags().GetString("iv-key")
-		ivStr, _ := cmd.Flags().GetString("iv")
-		keyStr, _ := cmd.Flags().GetString("key")
+		ivkeyStr := viper.GetString("img4.dec.iv-key")
+		ivStr := viper.GetString("img4.dec.iv")
+		keyStr := viper.GetString("img4.dec.key")
+		outputDir := viper.GetString("img4.dec.output")
 		// validate flags
 		if len(ivkeyStr) != 0 && (len(ivStr) != 0 || len(keyStr) != 0) {
 			return fmt.Errorf("cannot specify both --iv-key AND --iv/--key")
 		} else if len(ivkeyStr) == 0 && (len(ivStr) == 0 || len(keyStr) == 0) {
 			return fmt.Errorf("must specify either --iv-key OR --iv/--key")
+		}
+
+		infile := filepath.Clean(args[0])
+		outfile := infile + ".dec"
+
+		if outputDir != "" {
+			outfile = filepath.Join(outputDir, filepath.Base(outfile))
 		}
 
 		var iv []byte
@@ -89,7 +102,7 @@ var decImg4Cmd = &cobra.Command{
 				return fmt.Errorf("failed to decode --iv-key: %v", err)
 			}
 		}
-		utils.Indent(log.Info, 2)(fmt.Sprintf("Decrypting file to %s", outputFile))
-		return icmd.DecryptPayload(args[0], outputFile, iv, key)
+		utils.Indent(log.Info, 2)(fmt.Sprintf("Decrypting file to %s", outfile))
+		return icmd.DecryptPayload(infile, outfile, iv, key)
 	},
 }

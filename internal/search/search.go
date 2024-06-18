@@ -16,6 +16,7 @@ import (
 	icmd "github.com/blacktop/ipsw/internal/commands/img4"
 	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils"
+	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/info"
 )
 
@@ -34,6 +35,13 @@ func scanDmg(ipswPath, dmgPath, dmgType string, handler func(string, *macho.File
 		defer os.Remove(dmgs[0])
 	} else {
 		utils.Indent(log.Debug, 2)(fmt.Sprintf("Found extracted %s", dmgPath))
+	}
+	if filepath.Ext(dmgPath) == ".aea" {
+		var err error
+		dmgPath, err = aea.Decrypt(dmgPath, filepath.Dir(dmgPath), nil)
+		if err != nil {
+			return fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
+		}
 	}
 	utils.Indent(log.Debug, 2)(fmt.Sprintf("Mounting %s %s", dmgType, dmgPath))
 	mountPoint, alreadyMounted, err := utils.MountDMG(dmgPath)
@@ -101,7 +109,6 @@ func scanDmg(ipswPath, dmgPath, dmgType string, handler func(string, *macho.File
 
 // ForEachMachoInIPSW walks the IPSW and calls the handler for each macho file found
 func ForEachMachoInIPSW(ipswPath string, handler func(string, *macho.File) error) error {
-
 	i, err := info.Parse(ipswPath)
 	if err != nil {
 		return fmt.Errorf("failed to parse IPSW: %v", err)
@@ -116,13 +123,19 @@ func ForEachMachoInIPSW(ipswPath string, handler func(string, *macho.File) error
 	if systemOS, err := i.GetSystemOsDmg(); err == nil {
 		log.Info("Scanning SystemOS")
 		if err := scanDmg(ipswPath, systemOS, "SystemOS", handler); err != nil {
-			return fmt.Errorf("failed to scan files in SystemOS %s: %v", systemOS, err)
+			return fmt.Errorf("failed to scan files in SystemOS %s: %w", systemOS, err)
 		}
 	}
 	if appOS, err := i.GetAppOsDmg(); err == nil {
 		log.Info("Scanning AppOS")
 		if err := scanDmg(ipswPath, appOS, "AppOS", handler); err != nil {
-			return fmt.Errorf("failed to scan files in AppOS %s: %v", appOS, err)
+			return fmt.Errorf("failed to scan files in AppOS %s: %w", appOS, err)
+		}
+	}
+	if excOS, err := i.GetExclaveOSDmg(); err == nil {
+		log.Info("Scanning ExclaveOS")
+		if err := scanDmg(ipswPath, excOS, "ExclaveOS", handler); err != nil {
+			return fmt.Errorf("failed to scan files in ExclaveOS %s: %w", excOS, err)
 		}
 	}
 

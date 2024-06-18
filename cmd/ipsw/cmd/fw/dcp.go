@@ -22,16 +22,28 @@ THE SOFTWARE.
 package fw
 
 import (
+	"fmt"
+	"path/filepath"
+
 	"github.com/apex/log"
+	"github.com/blacktop/go-macho"
+	"github.com/blacktop/ipsw/internal/magic"
+	"github.com/blacktop/ipsw/pkg/bundle"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
+// NOTE:
+//   Firmware/dcp/t8130dcp.im4p
+//   Firmware/dcp/t8130dcp_restore.im4p
+
 func init() {
 	FwCmd.AddCommand(dcpCmd)
 
+	dcpCmd.Flags().BoolP("info", "i", false, "Print info")
 	dcpCmd.Flags().StringP("output", "o", "", "Folder to extract files to")
 	dcpCmd.MarkFlagDirname("output")
+	viper.BindPFlag("fw.dcp.info", dcpCmd.Flags().Lookup("info"))
 	viper.BindPFlag("fw.dcp.output", dcpCmd.Flags().Lookup("output"))
 }
 
@@ -40,6 +52,7 @@ var dcpCmd = &cobra.Command{
 	Use:     "dcp",
 	Aliases: []string{"d"},
 	Short:   "🚧 Dump MachOs",
+	Args:    cobra.ExactArgs(1),
 	Hidden:  true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -47,13 +60,28 @@ var dcpCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
-		// Firmware/dcp/t8130dcp.im4p
-		// Firmware/dcp/t8130dcp_restore.im4p
-
 		// flags
+		showInfo := viper.GetBool("fw.dcp.info")
 		// output := viper.GetString("fw.dcp.output")
 
-		panic("not implemented")
+		if showInfo {
+			if ok, _ := magic.IsMachO(args[0]); ok { /* MachO binary */
+				m, err := macho.Open(filepath.Clean(args[0]))
+				if err != nil {
+					return fmt.Errorf("failed to parse MachO file: %v", err)
+				}
+				defer m.Close()
+				fmt.Println(m.FileTOC.String())
+			} else {
+				bn, err := bundle.Parse(filepath.Clean(args[0]))
+				if err != nil {
+					return err
+				}
+				fmt.Println(bn)
+			}
+		} else {
+			panic("not implemented")
+		}
 
 		return nil
 	},

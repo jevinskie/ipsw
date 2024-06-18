@@ -5,7 +5,7 @@
 // See: https://docusaurus.io/docs/api/docusaurus-config
 
 const path = require("path");
-import {themes as prismThemes} from "prism-react-renderer";
+import { themes as prismThemes } from "prism-react-renderer";
 const lightCodeTheme = prismThemes.vsDark;
 const darkCodeTheme = prismThemes.palenight;
 
@@ -13,16 +13,21 @@ const darkCodeTheme = prismThemes.palenight;
 const config = {
   title: "ipsw",
   tagline: "iOS/macOS Research Swiss Army Knife",
-  url: "https://blacktop.github.io",
-  baseUrl: "/ipsw",
-  onBrokenLinks: "throw",
-  onBrokenMarkdownLinks: "warn",
   favicon: "img/logo/ipsw.ico",
+
+  // Set the production url of your site here
+  url: "https://blacktop.github.io",
+  // Set the /<baseUrl>/ pathname under which your site is served
+  // For GitHub pages deployment, it is often '/<projectName>/'
+  baseUrl: "/ipsw",
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
   organizationName: "blacktop", // Usually your GitHub org/user name.
   projectName: "ipsw", // Usually your repo name.
+
+  onBrokenLinks: "throw",
+  onBrokenMarkdownLinks: "warn",
 
   // Even if you don't use internalization, you can use this field to set useful
   // metadata like html lang. For example, if your site is Chinese, you may want
@@ -66,26 +71,28 @@ const config = {
       }),
     ],
     [
-      "redocusaurus",
-      /** @type {import('redocusaurus').PresetEntry} */
-      ({
-        // Plugin Options for loading OpenAPI files
+      'redocusaurus',
+      {
+        debug: Boolean(process.env.DEBUG || process.env.CI),
+        config: path.join(__dirname, 'redocly.yaml'),
         specs: [
           {
-            spec: "api/swagger.json",
-            route: "/api",
+            id: 'ipsw-api',
+            spec: 'api/swagger.json',
+            route: '/api/',
             layout: {
               title: "ipsw API",
               noFooter: true,
             },
           },
         ],
-        // Theme Options for modifying how redoc renders them
         theme: {
-          // Change with your site colors
-          primaryColor: "#503B9F",
+          /**
+           * Highlight color for docs
+           */
+          primaryColor: '#503B9F',
         },
-      }),
+      },
     ],
   ],
   // plugins: [require.resolve("@cmfcmf/docusaurus-search-local")],
@@ -114,11 +121,11 @@ const config = {
         themes: [path.resolve(__dirname, "/src/themes/prism-nord")],
         additionalLanguages: ["armasm", "llvm", "bash"],
       },
-      // algolia: {
-      //   appId: "XN7OVST81R",
-      //   apiKey: "493729d49a9639b14fe433a033ef5992",
-      //   indexName: "ipsw",
-      // },
+      algolia: {
+        appId: "KYIBYORJ9P",
+        apiKey: "1c1fbcef804f465f798caba08afc1f7c",
+        indexName: "ipsw",
+      },
       navbar: {
         hideOnScroll: true,
         title: "ipsw",

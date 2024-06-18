@@ -17,16 +17,20 @@ ipsw ent [flags]
 ### Examples
 
 ```bash
-  # Search IPSW for entitlement key
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --key platform-application
-  # Search local folder for entitlement key
-  ❯ ipsw ent --input /usr/bin --db /tmp --val platform-application
-  # Search IPSW for entitlement value (i.e. one of the <array> strings)
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --val LockdownMode
-  # Dump entitlements for MachO in IPSW
-  ❯ ipsw ent --ipsw <IPSW> --db /tmp --file WebContent
-  # Diff two IPSWs
-  ❯ ipsw ent --diff --ipsw <PREV_IPSW> --ipsw <NEW_IPSW> --db /tmp
+# Search IPSW for entitlement key
+❯ ipsw ent --ipsw <IPSW> --db /tmp --key platform-application
+
+# Search local folder for entitlement key
+❯ ipsw ent --input /usr/bin --db /tmp --val platform-application
+
+# Search IPSW for entitlement value (i.e. one of the <array> strings)
+❯ ipsw ent --ipsw <IPSW> --db /tmp --val LockdownMode
+
+# Dump entitlements for MachO in IPSW
+❯ ipsw ent --ipsw <IPSW> --db /tmp --file WebContent
+
+# Diff two IPSWs
+❯ ipsw ent --diff --ipsw <PREV_IPSW> --ipsw <NEW_IPSW> --db /tmp
 ```
 
 ### Options
@@ -35,12 +39,13 @@ ipsw ent [flags]
       --db string           Folder to r/w entitlement databases
   -d, --diff                Diff entitlements
   -f, --file string         Dump entitlements for MachO as plist
+      --file-only           Only output the file path of matches
   -h, --help                help for ent
       --input stringArray   Folders of MachOs to analyze
       --ipsw stringArray    IPSWs to analyze
-  -k, --key string          Entitlement KEY to search for
+  -k, --key string          Entitlement KEY regex to search for
   -m, --md                  Markdown style output
-  -v, --val string          Entitlement VALUE to search for (i.e. <array> strings)
+  -v, --val string          Entitlement VALUE regex to search for (i.e. <array> strings)
 ```
 
 ### Options inherited from parent commands

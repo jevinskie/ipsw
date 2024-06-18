@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-macho/types"
 	"github.com/blacktop/ipsw/internal/utils"
 )
 
@@ -72,6 +73,10 @@ func (dtree *DeviceTree) Summary() (*Summary, error) {
 	summary := &Summary{}
 
 	children := (*dtree)["device-tree"]["children"]
+
+	if children == nil {
+		return nil, fmt.Errorf("failed to get device tree node children")
+	}
 
 	switch reflect.TypeOf(children).Kind() {
 	case reflect.Slice:
@@ -157,6 +162,99 @@ func (dtree *DeviceTree) Summary() (*Summary, error) {
 	return summary, nil
 }
 
+func printNode(out *strings.Builder, node Properties, depth int) {
+	for k, v := range node {
+		switch k {
+		case "children":
+			switch reflect.TypeOf(v).Kind() {
+			case reflect.Slice:
+				s := reflect.ValueOf(v)
+				for i := 0; i < s.Len(); i++ {
+					child := s.Index(i)
+					for kk, vv := range child.Interface().(DeviceTree) {
+						out.WriteString(fmt.Sprintf("%s%s:\n", strings.Repeat(" ", depth+2), kk))
+						printNode(out, vv, depth+4)
+					}
+				}
+			}
+		default:
+			switch vv := v.(type) {
+			case int:
+				if vv == 0 || vv < 1000 {
+					out.WriteString(fmt.Sprintf("%s%s: %d\n", strings.Repeat(" ", depth), k, vv))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s: %#x\n", strings.Repeat(" ", depth), k, vv))
+				}
+			case uint16:
+				if vv == 0 || vv < 1000 {
+					out.WriteString(fmt.Sprintf("%s%s: %d\n", strings.Repeat(" ", depth), k, vv))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s: %#x\n", strings.Repeat(" ", depth), k, vv))
+				}
+			case uint32:
+				if vv == 0 || vv < 1000 {
+					out.WriteString(fmt.Sprintf("%s%s: %d\n", strings.Repeat(" ", depth), k, vv))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s: %#x\n", strings.Repeat(" ", depth), k, vv))
+				}
+			case uint64:
+				if vv == 0 || vv < 1000 {
+					out.WriteString(fmt.Sprintf("%s%s: %d\n", strings.Repeat(" ", depth), k, vv))
+				} else {
+					out.WriteString(fmt.Sprintf("%s%s: %#x\n", strings.Repeat(" ", depth), k, vv))
+				}
+			case string:
+				out.WriteString(fmt.Sprintf("%s%s: \"%s\"\n", strings.Repeat(" ", depth), k, vv))
+			case []string:
+				for _, s := range vv {
+					out.WriteString(fmt.Sprintf("%s%s: \"%s\"\n", strings.Repeat(" ", depth+2), k, s))
+				}
+			case pmgr_dev:
+				out.WriteString(fmt.Sprintf("%s%s: \n%s\n", strings.Repeat(" ", depth), k, vv.String(depth+2)))
+			case []pmgr_dev:
+				for _, dev := range vv {
+					out.WriteString(fmt.Sprintf("%s%s: \n%s\n", strings.Repeat(" ", depth), k, dev.String(depth+2)))
+				}
+			case pmgr_map:
+				out.WriteString(fmt.Sprintf("%s%s: reg=%#x off=%#x unk=%#x\n", strings.Repeat(" ", depth), k, vv.Reg, vv.Off, vv.Unk))
+			case []pmgr_map:
+				for _, m := range vv {
+					out.WriteString(fmt.Sprintf("%s%s: reg=%#x off=%#x unk=%#x\n", strings.Repeat(" ", depth), k, m.Reg, m.Off, m.Unk))
+				}
+			case pmgr_reg:
+				out.WriteString(fmt.Sprintf("%s%s: addr=%#x sz=%#x\n", strings.Repeat(" ", depth), k, vv.Addr, vv.Size))
+			case []pmgr_reg:
+				for _, reg := range vv {
+					out.WriteString(fmt.Sprintf("%s%s: addr=%#x sz=%#x\n", strings.Repeat(" ", depth+2), k, reg.Addr, reg.Size))
+				}
+			case PmapIORange:
+				out.WriteString(fmt.Sprintf("%s%s: %#v\n", strings.Repeat(" ", depth), k, vv))
+			case []PmapIORange:
+				out.WriteString(fmt.Sprintf("%s%s:\n", strings.Repeat(" ", depth), k))
+				for _, pmap := range vv {
+					out.WriteString(fmt.Sprintf("%s\"%s\" start=%#x sz=%#x flags=%#x\n", strings.Repeat(" ", depth+2), pmap.Name[:], pmap.Start, pmap.Size, pmap.Flags))
+				}
+			case []region:
+				out.WriteString(fmt.Sprintf("%s%s:\n", strings.Repeat(" ", depth), k))
+				for _, reg := range vv {
+					out.WriteString(fmt.Sprintf("%sstart=%#06x end=%#06x\n", strings.Repeat(" ", depth+2), reg.Start, reg.End))
+				}
+			default:
+				out.WriteString(fmt.Sprintf("%s%s: %v\n", strings.Repeat(" ", depth), k, vv))
+			}
+		}
+	}
+}
+
+func (dtree *DeviceTree) String() string {
+	var out strings.Builder
+	for k, v := range *dtree {
+		out.WriteString(fmt.Sprintf("%s:\n", k))
+		printNode(&out, v, 2)
+	}
+	return out.String()
+}
+
 // GetProductName returns the device-trees product names
 func (dtree *DeviceTree) GetProductName() (string, error) {
 	children := (*dtree)["device-tree"]["children"]
@@ -210,6 +308,36 @@ func isZero(bytes []byte) bool {
 	return b == 0
 }
 
+func parseInt(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	switch len(value) {
+	case binary.Size(uint8(0)):
+		return uint8(value[0])
+	case binary.Size(uint16(0)):
+		if bytes.HasSuffix(value, []byte("\xff")) {
+			return int16(binary.LittleEndian.Uint16(value))
+		} else {
+			return uint16(binary.LittleEndian.Uint16(value))
+		}
+	case binary.Size(uint32(0)):
+		if bytes.HasSuffix(value, []byte("\xff")) {
+			return int32(binary.LittleEndian.Uint32(value))
+		} else {
+			return uint32(binary.LittleEndian.Uint32(value))
+		}
+	case binary.Size(uint64(0)):
+		if bytes.HasSuffix(value, []byte("\xff")) {
+			return int64(binary.LittleEndian.Uint64(value))
+		} else {
+			return uint64(binary.LittleEndian.Uint64(value))
+		}
+	default:
+		return parseValue(value)
+	}
+}
+
 func parseValue(value []byte) any {
 	if len(value) == 0 {
 		return nil
@@ -227,6 +355,14 @@ func parseValue(value []byte) any {
 			}
 			return string(str)
 		}
+		if len(value) > 4 {
+			size := binary.LittleEndian.Uint32(value[:4])
+			if size <= uint32(len(value)-4) && !bytes.Contains(value[4:4+size], []byte("\x00")) {
+				if utils.IsASCII(string(value[4 : 4+size])) {
+					return string(value[4 : 4+size])
+				}
+			}
+		}
 		parts := bytes.Split(str, []byte("\x00"))
 		if len(parts) > 1 { // value is a string array
 			var values []string
@@ -239,7 +375,9 @@ func parseValue(value []byte) any {
 					// }
 				}
 			}
-			return values
+			if len(values) > 0 {
+				return values
+			}
 		}
 	}
 
@@ -249,27 +387,47 @@ func parseValue(value []byte) any {
 
 	switch len(value) {
 	case binary.Size(uint8(0)):
-		fallthrough
+		return uint8(value[0])
 	case binary.Size(uint16(0)):
 		if bytes.HasSuffix(value, []byte("\xff")) {
 			return int16(binary.LittleEndian.Uint16(value))
+		} else {
+			return uint16(binary.LittleEndian.Uint16(value))
 		}
-		fallthrough
 	case binary.Size(uint32(0)):
 		if bytes.HasSuffix(value, []byte("\xff")) {
 			return int32(binary.LittleEndian.Uint32(value))
+		} else {
+			return uint32(binary.LittleEndian.Uint32(value))
 		}
-		fallthrough
 	case binary.Size(uint64(0)):
 		if bytes.HasSuffix(value, []byte("\xff")) {
 			return int64(binary.LittleEndian.Uint64(value))
-		}
-		if i, err := binary.Uvarint(value); err > 0 {
-			return i
+		} else {
+			return uint64(binary.LittleEndian.Uint64(value))
 		}
 	}
 	// value is data
 	return base64.StdEncoding.EncodeToString(value)
+}
+
+func parseOffSz(value []byte) any {
+	switch {
+	case len(value) > 4:
+		kind := binary.LittleEndian.Uint32(value[:4])
+		_ = kind
+		switch len(value[4:]) {
+		case binary.Size(uint8(0)):
+			return uint8(value[4])
+		case binary.Size(uint16(0)):
+			return uint16(binary.LittleEndian.Uint16(value[4:]))
+		case binary.Size(uint32(0)):
+			return uint32(binary.LittleEndian.Uint32(value[4:]))
+		case binary.Size(uint64(0)):
+			return uint64(binary.LittleEndian.Uint64(value[4:]))
+		}
+	}
+	return parseValue(value)
 }
 
 func parseReg(value []byte) any {
@@ -348,6 +506,28 @@ func parsePmapIORanges(value []byte) any {
 	return ranges
 }
 
+type region struct {
+	Start uint64
+	End   uint64
+}
+
+func parseRegions(value []byte) any {
+	var regions []region
+	r := bytes.NewReader(value)
+	for {
+		var reg region
+		err := binary.Read(r, binary.LittleEndian, &reg)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return parseValue(value)
+		}
+		regions = append(regions, reg)
+	}
+	return regions
+}
+
 func parseNode(buffer io.Reader) (Node, error) {
 	var node Node
 	// Read a Node from the buffer
@@ -357,7 +537,7 @@ func parseNode(buffer io.Reader) (Node, error) {
 	return node, nil
 }
 
-func parseNodeProperty(buffer io.Reader) (string, any, error) {
+func parseNodeProperty(buffer io.Reader, propName string) (string, any, error) {
 	var nProp NodeProperty
 	// Read a NodeProperty from the buffer
 	if err := binary.Read(buffer, binary.LittleEndian, &nProp); err != nil {
@@ -377,6 +557,8 @@ func parseNodeProperty(buffer io.Reader) (string, any, error) {
 	key := string(bytes.TrimRight(nProp.Name[:], "\x00"))
 	var value any
 	switch key {
+	case "AAPL,phandle":
+		value = parseInt(dat)
 	case "platform-name":
 		value = string(bytes.TrimRight(dat[:], "\x00"))
 	case "pmap-io-ranges":
@@ -385,14 +567,26 @@ func parseNodeProperty(buffer io.Reader) (string, any, error) {
 		value = parsePmgrMap(dat)
 	case "devices":
 		value = parsePmgrDevices(dat)
+	case "regions":
+		value = parseRegions(dat)
 	case "reg-private":
 		value = parseAddr(dat)
-	default:
-		if key == "reg" {
-			value = parseReg(dat)
+	case "value":
+		if strings.HasPrefix(propName, "__MACHO") {
+			value = parseOffSz(dat)
 		} else {
 			value = parseValue(dat)
 		}
+	case "reg":
+		value = parseReg(dat)
+	case "uuid":
+		if len(dat) == 16 {
+			value = types.UUID(dat).String()
+		} else {
+			value = parseValue(dat)
+		}
+	default:
+		value = parseValue(dat)
 	}
 
 	return key, value, nil
@@ -404,7 +598,7 @@ func getProperties(buffer io.Reader, node Node) (string, DeviceTree, error) {
 	props := Properties{}
 
 	for index := 0; index < int(node.NumProperties); index++ {
-		key, value, err := parseNodeProperty(buffer)
+		key, value, err := parseNodeProperty(buffer, nodeName)
 		if err != nil {
 			return "", DeviceTree{}, err
 		}
@@ -462,6 +656,10 @@ func parseDeviceTree(r io.Reader) (*DeviceTree, error) {
 	}
 
 	return &dtree, nil
+}
+
+func ParseData(r io.Reader) (*DeviceTree, error) {
+	return parseDeviceTree(r)
 }
 
 // Parse parses plist files in a local ipsw file

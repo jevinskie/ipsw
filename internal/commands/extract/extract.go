@@ -5,23 +5,29 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-plist"
+	fwcmd "github.com/blacktop/ipsw/internal/commands/fw"
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
+	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/dyld"
 	"github.com/blacktop/ipsw/pkg/img4"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/blacktop/ipsw/pkg/kernelcache"
 	"github.com/blacktop/ipsw/pkg/lzfse"
+	"github.com/blacktop/ipsw/pkg/ota"
 )
 
 // Config is the extract command configuration.
@@ -194,7 +200,7 @@ func SPTM(c *Config) ([]string, error) {
 
 		folder := filepath.Join(filepath.Clean(c.Output), strings.TrimPrefix(filepath.Dir(f), tmpDIR))
 		fname := filepath.Join(folder, strings.TrimSuffix(filepath.Base(f), ".im4p"))
-		if err := os.MkdirAll(folder, 0750); err != nil {
+		if err := os.MkdirAll(folder, 0o750); err != nil {
 			return nil, fmt.Errorf("failed to create output directory '%s': %v", folder, err)
 		}
 
@@ -203,16 +209,90 @@ func SPTM(c *Config) ([]string, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to decompress '%s': %v", f, err)
 			}
-			if err = os.WriteFile(fname, dat, 0660); err != nil {
+			if err = os.WriteFile(fname, dat, 0o666); err != nil {
 				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
 			}
 			outfiles = append(outfiles, fname)
 		} else {
-			if err = os.WriteFile(fname, im4p.Data, 0660); err != nil {
+			if err = os.WriteFile(fname, im4p.Data, 0o666); err != nil {
 				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
 			}
 			outfiles = append(outfiles, fname)
 		}
+	}
+
+	return outfiles, nil
+}
+
+func Exclave(c *Config) ([]string, error) {
+	var tmpOut []string
+	var outfiles []string
+
+	origOutput := c.Output
+
+	tmpDIR, err := os.MkdirTemp("", "ipsw_extract_exclave")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary directory to store Exlave im4p: %v", err)
+	}
+	defer os.RemoveAll(tmpDIR)
+	c.Output = tmpDIR
+
+	c.Pattern = `.*exclavecore_bundle.*im4p$`
+	out, err := Search(c)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no Exclave bundles found")
+	}
+
+	tmpOut = append(tmpOut, out...)
+
+	c.Output = origOutput
+
+	for _, f := range tmpOut {
+		if strings.Contains(f, ".restore.") {
+			continue // TODO: skip restore bundles for now
+		}
+		dat, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open '%s': %v", f, err)
+		}
+
+		im4p, err := img4.ParseIm4p(bytes.NewReader(dat))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse '%s': %v", f, err)
+		}
+
+		folder := filepath.Join(filepath.Clean(c.Output), strings.TrimPrefix(filepath.Dir(f), tmpDIR))
+		fname := filepath.Join(folder, strings.TrimSuffix(filepath.Base(f), ".im4p"))
+		if err := os.MkdirAll(folder, 0o750); err != nil {
+			return nil, fmt.Errorf("failed to create output directory '%s': %v", folder, err)
+		}
+
+		if bytes.Contains(im4p.Data[:4], []byte("bvx2")) {
+			dat, err = lzfse.NewDecoder(im4p.Data).DecodeBuffer()
+			if err != nil {
+				return nil, fmt.Errorf("failed to decompress '%s': %v", f, err)
+			}
+			if err = os.WriteFile(fname, dat, 0o666); err != nil {
+				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
+			}
+			outfiles = append(outfiles, fname)
+		} else {
+			if err = os.WriteFile(fname, im4p.Data, 0o666); err != nil {
+				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
+			}
+			outfiles = append(outfiles, fname)
+		}
+	}
+
+	for _, exc := range outfiles {
+		out, err := fwcmd.Extract(exc, filepath.Dir(exc))
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract files from exclave bundle: %v", err)
+		}
+		outfiles = append(outfiles, out...)
 	}
 
 	return outfiles, nil
@@ -236,7 +316,38 @@ func DSC(c *Config) ([]string, error) {
 		}
 		if i.Plists.Type == "OTA" {
 			if runtime.GOOS == "darwin" {
-				return dyld.ExtractFromRemoteCryptex(zr, filepath.Join(filepath.Clean(c.Output), folder), c.Arches, c.DriverKit)
+				out, err := dyld.ExtractFromRemoteCryptex(zr, filepath.Join(filepath.Clean(c.Output), folder), c.Arches, c.DriverKit)
+				if err != nil {
+					if errors.Is(err, dyld.ErrNoCryptex) {
+						c.Pattern = `^` + dyld.CacheRegex
+						rfiles, err := ota.RemoteList(zr)
+						if err != nil {
+							return nil, fmt.Errorf("failed to list files in remote OTA: %v", err)
+						}
+						var dcaches []string
+						for _, f := range rfiles {
+							if regexp.MustCompile(c.Pattern).MatchString(f.Name()) {
+								dcaches = append(dcaches, f.Name())
+							}
+						}
+						out, err = ota.RemoteExtract(zr, c.Pattern, filepath.Join(filepath.Clean(c.Output), folder), func(s string) bool {
+							s = strings.TrimPrefix(s, folder+string(os.PathSeparator))
+							if slices.Contains(dcaches, s) {
+								dcaches = utils.RemoveStrFromSlice(dcaches, s)
+								if len(dcaches) == 0 {
+									return true
+								}
+							}
+							return false
+						})
+						if err != nil {
+							return nil, fmt.Errorf("failed to extract OTA: %v", err)
+						}
+					} else {
+						return nil, fmt.Errorf("failed to extract dyld_shared_cache from remote OTA: %v", err)
+					}
+				}
+				return out, nil
 			}
 			return nil, fmt.Errorf("extracting dyld_shared_cache from remote OTA is only supported on macOS")
 		}
@@ -316,6 +427,11 @@ func DMG(c *Config) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to find filesystem DMG in IPSW: %v", err)
 		}
+	case "exc":
+		dmgPath, err = i.GetExclaveOSDmg()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find exclaveOS DMG in IPSW: %v", err)
+		}
 	}
 
 	return utils.SearchZip(zr.File, regexp.MustCompile(dmgPath), filepath.Join(filepath.Clean(c.Output), folder), c.Flatten, c.Progress)
@@ -370,14 +486,139 @@ func Keybags(c *Config) (fname string, err error) {
 	}
 
 	fname = filepath.Join(filepath.Join(filepath.Clean(c.Output), folder), "kbags.json")
-	if err := os.MkdirAll(filepath.Dir(fname), 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fname), 0o750); err != nil {
 		return "", fmt.Errorf("failed to create directory %s: %v", filepath.Dir(fname), err)
 	}
-	if err := os.WriteFile(fname, out, 0660); err != nil {
+	if err := os.WriteFile(fname, out, 0o666); err != nil {
 		return "", fmt.Errorf("failed to write %s: %v", filepath.Join(filepath.Join(filepath.Clean(c.Output), folder), "kbags.json"), err)
 	}
 
 	return
+}
+
+// FcsKeys extracts the AEA1 DMG fsc-keys from an IPSW
+func FcsKeys(c *Config) ([]string, error) {
+	if len(c.IPSW) == 0 && len(c.URL) == 0 {
+		return nil, fmt.Errorf("no IPSW or URL provided")
+	}
+
+	var artifacts []string
+
+	var err error
+	var i *info.Info
+	var folder string
+	var zr *zip.Reader
+
+	if len(c.IPSW) > 0 {
+		i, folder, err = getFolder(c)
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.Open(filepath.Clean(c.IPSW))
+		if err != nil {
+			return nil, fmt.Errorf("failed to open IPSW: %v", err)
+		}
+		defer f.Close()
+		finfo, err := f.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat IPSW: %v", err)
+		}
+		zr, err = zip.NewReader(f, finfo.Size())
+		if err != nil {
+			return nil, fmt.Errorf("failed to open IPSW: %v", err)
+		}
+	} else if len(c.URL) > 0 {
+		if !isURL(c.URL) {
+			return nil, fmt.Errorf("invalid URL provided: %s", c.URL)
+		}
+		i, zr, folder, err = getRemoteFolder(c)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var dmgPaths []string
+	dmgPath, err := i.GetSystemOsDmg()
+	if err != nil {
+		return nil, fmt.Errorf("failed to find systemOS DMG in IPSW: %v", err)
+	}
+	dmgPaths = append(dmgPaths, dmgPath)
+	dmgPath, err = i.GetFileSystemOsDmg()
+	if err != nil {
+		return nil, fmt.Errorf("failed to find filesystem DMG in IPSW: %v", err)
+	}
+	dmgPaths = append(dmgPaths, dmgPath)
+
+	kmap := make(map[string]aea.PrivateKey)
+
+	for _, dmgPath := range dmgPaths {
+		if filepath.Ext(dmgPath) != ".aea" {
+			return nil, fmt.Errorf("fcs-keys are only found in AEA1 DMGs: found '%s'", filepath.Base(dmgPath))
+		}
+
+		out, err := utils.SearchPartialZip(zr.File, regexp.MustCompile(dmgPath+`$`), os.TempDir(), 0x1000, false, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract fcs-keys from DMG: %v", err)
+		}
+		defer func() {
+			for _, f := range out {
+				os.Remove(f)
+			}
+		}()
+
+		for _, f := range out {
+			metadata, err := aea.Info(filepath.Clean(f))
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse AEA1 metadata: %v", err)
+			}
+			pkmap, err := metadata.GetPrivateKey(nil)
+			if err != nil {
+				return nil, err
+			}
+
+			if c.JSON {
+				// check if json file exists
+				if _, err := os.Stat(filepath.Join(filepath.Clean(c.Output), "fcs-keys.json")); !os.IsNotExist(err) {
+					data, err := os.ReadFile(filepath.Join(filepath.Clean(c.Output), "fcs-keys.json"))
+					if err != nil {
+						return nil, fmt.Errorf("failed to read fcs-keys.json: %v", err)
+					}
+					if err := json.Unmarshal(data, &kmap); err != nil {
+						return nil, fmt.Errorf("failed to unmarshal fcs-keys: %v", err)
+					}
+				}
+				maps.Copy(kmap, pkmap)
+			} else {
+				for _, pk := range pkmap {
+					fname := filepath.Join(filepath.Clean(c.Output), folder, filepath.Base(dmgPath)+".pem")
+
+					if err := os.MkdirAll(filepath.Dir(fname), 0o750); err != nil {
+						return nil, fmt.Errorf("failed to create directory %s: %v", filepath.Dir(fname), err)
+					}
+
+					if err := os.WriteFile(fname, pk, 0o644); err != nil {
+						return nil, fmt.Errorf("failed to write fcs-key.pem: %v", err)
+					}
+
+					artifacts = append(artifacts, fname)
+				}
+			}
+		}
+	}
+
+	if c.JSON {
+		out, err := json.Marshal(kmap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal fcs-keys: %v", err)
+		}
+		fname := filepath.Join(filepath.Clean(c.Output), "fcs-keys.json")
+		if err := os.WriteFile(fname, out, 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write fcs-keys.json: %v", err)
+		}
+		artifacts = append(artifacts, fname)
+	}
+
+	return artifacts, nil
 }
 
 // Search searches for files matching a pattern in an IPSW
@@ -426,6 +667,13 @@ func Search(c *Config) ([]string, error) {
 				out, err := utils.ExtractFromDMG(c.IPSW, fsOS, destPath, re)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract files from filesystem %s: %v", fsOS, err)
+				}
+				artifacts = append(artifacts, out...)
+			}
+			if excOS, err := i.GetExclaveOSDmg(); err == nil {
+				out, err := utils.ExtractFromDMG(c.IPSW, excOS, destPath, re)
+				if err != nil {
+					return nil, fmt.Errorf("failed to extract files from ExclaveOS %s: %v", excOS, err)
 				}
 				artifacts = append(artifacts, out...)
 			}

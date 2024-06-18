@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=jcroql
-version: 1
+version: 2
 
 before:
   hooks:
@@ -881,7 +881,7 @@ changelog:
   use: github
   groups:
     - title: Dependency updates
-      regexp: '^.*?(feat|fix|chore)\(deps\)!?:.+$'
+      regexp: '^.*?(.+)\(deps\)!?:.+$'
       order: 300
     - title: "New Features"
       regexp: '^.*?feat(\(.+\))??!?:.+$'

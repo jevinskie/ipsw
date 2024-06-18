@@ -22,6 +22,7 @@ THE SOFTWARE.
 package download
 
 import (
+	"crypto/aes"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -54,6 +55,8 @@ func init() {
 	ipswCmd.Flags().StringArrayP("dyld-arch", "a", []string{}, "dyld_shared_cache architecture(s) to remote extract")
 	// ipswCmd.Flags().BoolP("kernel-spec", "", false, "Download kernels into spec folders")
 	ipswCmd.Flags().String("pattern", "", "Download remote files that match regex")
+	ipswCmd.Flags().Bool("fcs-keys", false, "Download AEA1 DMG fcs-key pem files")
+	ipswCmd.Flags().Bool("fcs-keys-json", false, "Download AEA1 DMG fcs-keys as JSON")
 	ipswCmd.Flags().Bool("decrypt", false, "Attempt to decrypt the partial files if keys are available")
 	ipswCmd.Flags().StringP("output", "o", "", "Folder to download files to")
 	ipswCmd.Flags().BoolP("flat", "f", false, "Do NOT perserve directory structure when downloading with --pattern")
@@ -71,6 +74,8 @@ func init() {
 	viper.BindPFlag("download.ipsw.dyld-arch", ipswCmd.Flags().Lookup("dyld-arch"))
 	// viper.BindPFlag("download.ipsw.kernel-spec", ipswCmd.Flags().Lookup("kernel-spec"))
 	viper.BindPFlag("download.ipsw.pattern", ipswCmd.Flags().Lookup("pattern"))
+	viper.BindPFlag("download.ipsw.fcs-keys", ipswCmd.Flags().Lookup("fcs-keys"))
+	viper.BindPFlag("download.ipsw.fcs-keys-json", ipswCmd.Flags().Lookup("fcs-keys-json"))
 	viper.BindPFlag("download.ipsw.decrypt", ipswCmd.Flags().Lookup("decrypt"))
 	viper.BindPFlag("download.ipsw.output", ipswCmd.Flags().Lookup("output"))
 	viper.BindPFlag("download.ipsw.flat", ipswCmd.Flags().Lookup("flat"))
@@ -138,6 +143,8 @@ var ipswCmd = &cobra.Command{
 		dyldArches := viper.GetStringSlice("download.ipsw.dyld-arch")
 		// kernelSpecFolders := viper.GetBool("download.ipsw.kernel-spec")
 		remotePattern := viper.GetString("download.ipsw.pattern")
+		fcsKeys := viper.GetBool("download.ipsw.fcs-keys")
+		fcsKeysJson := viper.GetBool("download.ipsw.fcs-keys-json")
 		decrypt := viper.GetBool("download.ipsw.decrypt")
 		output := viper.GetString("download.ipsw.output")
 		flat := viper.GetBool("download.ipsw.flat")
@@ -351,6 +358,20 @@ var ipswCmd = &cobra.Command{
 							}
 						}
 					}
+					// REMOTE AEA1 DMG fcs-key MODE
+					if fcsKeys || fcsKeysJson {
+						if fcsKeysJson {
+							config.JSON = true
+						}
+						log.Info("Extracting remote AEA1 DMG fcs-keys")
+						if out, err := extract.FcsKeys(config); err != nil {
+							return err
+						} else {
+							for _, f := range out {
+								utils.Indent(log.Info, 2)("Created " + f)
+							}
+						}
+					}
 					// PATTERN MATCHING MODE
 					if len(remotePattern) > 0 {
 						log.Infof("Downloading files matching pattern %#v", remotePattern)
@@ -385,14 +406,25 @@ var ipswCmd = &cobra.Command{
 												len(key.Iv) > 0 && len(key.Iv[idx]) > 0 && key.Iv[idx] != "Unknown" {
 												iv, err := hex.DecodeString(key.Iv[idx])
 												if err != nil {
-													return fmt.Errorf("failed to decode --iv-key: %v", err)
+													return fmt.Errorf("failed to decode iv: %v", err)
 												}
 												k, err := hex.DecodeString(key.Key[idx])
 												if err != nil {
-													return fmt.Errorf("failed to decode --iv-key: %v", err)
+													return fmt.Errorf("failed to decode key: %v", err)
 												}
 												utils.Indent(log.Info, 2)("Decrypted " + strings.TrimPrefix(in, cwd) + ".dec")
 												if err := img4.DecryptPayload(in, in+".dec", iv, k); err != nil {
+													return fmt.Errorf("failed to decrypt %s: %v", in, err)
+												}
+											} else if len(key.Kbag) > 0 && len(key.Kbag[idx]) > 0 && key.Kbag[idx] != "Unknown" {
+												kbag, err := hex.DecodeString(key.Kbag[idx])
+												if err != nil {
+													return fmt.Errorf("failed to decode kbag: %v", err)
+												}
+												iv := kbag[:aes.BlockSize]
+												key := kbag[aes.BlockSize:]
+												utils.Indent(log.Info, 2)("Decrypted " + strings.TrimPrefix(in, cwd) + ".dec")
+												if err := img4.DecryptPayload(in, in+".dec", iv, key); err != nil {
 													return fmt.Errorf("failed to decrypt %s: %v", in, err)
 												}
 											}

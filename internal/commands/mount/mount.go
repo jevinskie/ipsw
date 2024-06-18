@@ -12,10 +12,11 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/utils"
+	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/info"
 )
 
-var dmgTypes = []string{"fs", "sys", "app"}
+var dmgTypes = []string{"fs", "sys", "app", "exc"}
 
 // Context is the mount context
 type Context struct {
@@ -75,6 +76,11 @@ func DmgInIPSW(path, typ string) (*Context, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get AppOS DMG: %v", err)
 		}
+	case "exc":
+		dmgPath, err = i.GetExclaveOSDmg()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get ExclaveOS DMG: %v", err)
+		}
 	default:
 		return nil, fmt.Errorf("invalid subcommand: %s; must be one of: '%s'", typ, strings.Join(dmgTypes, "', '"))
 	}
@@ -90,6 +96,13 @@ func DmgInIPSW(path, typ string) (*Context, error) {
 		}
 		if len(dmgs) == 0 {
 			return nil, fmt.Errorf("failed to find %s in IPSW", dmgPath)
+		}
+	}
+
+	if filepath.Ext(extractedDMG) == ".aea" {
+		extractedDMG, err = aea.Decrypt(extractedDMG, filepath.Dir(extractedDMG), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
 		}
 	}
 
