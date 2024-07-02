@@ -684,6 +684,25 @@ func (f *File) GetSubCacheInfo(uuid mtypes.UUID) *SubcacheEntry {
 			return &info
 		}
 	}
+	if f.UUID == uuid {
+		return &SubcacheEntry{
+			UUID:          uuid,
+			CacheVMOffset: 0,
+			Extention:     "primary",
+		}
+	}
+	if f.symUUID == uuid {
+		mapping, err := f.GetMappingForOffsetForUUID(f.SubCacheInfo[len(f.SubCacheInfo)-1].UUID, 0)
+		if err != nil {
+			return nil
+		}
+		return &SubcacheEntry{
+			UUID:          uuid,
+			CacheVMOffset: f.SubCacheInfo[len(f.SubCacheInfo)-1].CacheVMOffset + mapping.Size,
+			Extention:     ".symbols",
+		}
+	}
+	log.Errorf("UUID not found in subcache info %s", uuid)
 	return nil
 }
 
@@ -1014,7 +1033,7 @@ func (f *File) parseSlideInfo(uuid mtypes.UUID, mapping *CacheMappingWithSlideIn
 						CacheFileOffset: rebaseLocation,
 						CacheVMAddress:  rebaseAddr,
 						Target:          targetValue,
-						Pointer:         pointer,
+						Pointer:         uint64(pointer),
 						Symbol:          symName,
 					})
 				}
@@ -1106,7 +1125,7 @@ func (f *File) parseSlideInfo(uuid mtypes.UUID, mapping *CacheMappingWithSlideIn
 							CacheFileOffset: pageContent + uint64(pageOffset),
 							CacheVMAddress:  pageContent + uint64(pageAddress),
 							Target:          targetValue,
-							Pointer:         pointer,
+							Pointer:         uint64(pointer),
 							Symbol:          symName,
 						})
 					}
@@ -1215,7 +1234,7 @@ func (f *File) parseSlideInfo(uuid mtypes.UUID, mapping *CacheMappingWithSlideIn
 						CacheFileOffset: rebaseLocation,
 						CacheVMAddress:  rebaseAddr,
 						Target:          targetValue,
-						Pointer:         pointer,
+						Pointer:         pointer.Raw(),
 						Symbol:          symName,
 					})
 				}
@@ -1747,6 +1766,44 @@ func (f *File) Image(name string) (*CacheImage, error) {
 		return nil, fmt.Errorf("multiple images found for %s (please supply FULL path):\n\t- %s", name, strings.Join(names, "\n\t- "))
 	}
 	return nil, fmt.Errorf("image %s not found in cache", name)
+}
+
+func (f *File) Search(search []byte) (map[mtypes.UUID][]uint64, error) {
+	chunkSize := uint64(4096)
+	tailLen := uint64(len(search) - 1)
+	chunk := make([]byte, chunkSize+tailLen)
+	matches := make(map[mtypes.UUID][]uint64)
+	for uuid, cache := range f.r {
+		var offset uint64
+		sr := io.NewSectionReader(cache, 0, 1<<63-1)
+		n, err := sr.Read(chunk[tailLen:])
+		idx := bytes.Index(chunk[tailLen:uint64(n)+tailLen], search)
+		for {
+			if idx >= 0 {
+				// scan backwards to find the start of the line
+				nullIdx := bytes.LastIndexByte(chunk[:uint64(idx)+tailLen], 0x00)
+				if nullIdx >= 0 {
+					if uint64(offset+uint64(nullIdx+1)) > 0 && uint64(offset+uint64(nullIdx+1)) >= uint64(len(search)-1) {
+						matches[uuid] = append(matches[uuid], uint64(offset+uint64(nullIdx+1))-uint64(len(search)-1))
+					} else {
+						matches[uuid] = append(matches[uuid], uint64(offset+uint64(nullIdx+1)))
+					}
+				} else {
+					matches[uuid] = append(matches[uuid], uint64(offset+uint64(idx)))
+				}
+			}
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return matches, err
+			}
+			copy(chunk, chunk[chunkSize:])
+			offset += chunkSize
+			n, err = sr.Read(chunk[tailLen:])
+			idx = bytes.Index(chunk[:uint64(n)+tailLen], search)
+		}
+	}
+	return matches, nil
 }
 
 // GetImageContainingTextAddr returns a dylib whose __TEXT segment contains a given virtual address

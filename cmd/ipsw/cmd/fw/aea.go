@@ -61,7 +61,7 @@ func init() {
 // aeaCmd represents the ane command
 var aeaCmd = &cobra.Command{
 	Use:   "aea",
-	Short: "Parse ANE1 DMGs",
+	Short: "Parse AEA1 DMGs",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		var pemData []byte
@@ -115,7 +115,7 @@ var aeaCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to parse AEA: %v", err)
 			}
-			pkmap, err := metadata.GetPrivateKey(nil)
+			pkmap, err := metadata.GetPrivateKey(nil, false)
 			if err != nil {
 				return fmt.Errorf("failed to get private key: %v", err)
 			}

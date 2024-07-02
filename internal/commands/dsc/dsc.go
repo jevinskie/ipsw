@@ -96,7 +96,9 @@ type SymbolLookup struct {
 // String is a struct that contains information about a dyld_shared_cache string
 // swagger:model
 type String struct {
+	Offset  uint64 `json:"address,omitempty"`
 	Address uint64 `json:"address,omitempty"`
+	Mapping string `json:"mapping,omitempty"`
 	Image   string `json:"image,omitempty"`
 	String  string `json:"string,omitempty"`
 }
@@ -387,7 +389,7 @@ func GetDylibsThatImport(f *dyld.File, name string) (*ImportedBy, error) {
 		for _, img := range f.Images {
 			pbl, err := f.GetDylibPrebuiltLoader(img.Name)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to get prebuilt loader for %s: %v", filepath.Base(img.Name), err)
 			}
 			for _, dep := range pbl.Dependents {
 				if strings.EqualFold(dep.Name, image.Name) {
@@ -399,7 +401,7 @@ func GetDylibsThatImport(f *dyld.File, name string) (*ImportedBy, error) {
 		for _, img := range f.Images {
 			m, err := img.GetPartialMacho()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to create partial MachO for image %s: %v", filepath.Base(img.Name), err)
 			}
 			for _, imp := range m.ImportedLibraries() {
 				if strings.EqualFold(imp, image.Name) {
@@ -424,7 +426,7 @@ func GetDylibsThatImport(f *dyld.File, name string) (*ImportedBy, error) {
 				}
 			}
 		}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get prebuilt loader set: %v", err)
 		}
 	}
 
@@ -601,6 +603,41 @@ func GetStrings(f *dyld.File, pattern string) ([]String, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex: %w", err)
 	}
+
+	matches, err := f.Search([]byte(pattern))
+	if err != nil {
+		return nil, fmt.Errorf("failed to search for pattern: %v", err)
+	}
+	for uuid, ms := range matches {
+		for _, match := range ms {
+			s := String{Offset: match}
+			if mapping, err := f.GetMappingForOffsetForUUID(uuid, match); err == nil {
+				s.Mapping = mapping.Name
+				if sc := f.GetSubCacheInfo(uuid); sc != nil {
+					s.Mapping += fmt.Sprintf(", sub_cache (%s)", sc.Extention)
+				}
+			} else {
+				if sc := f.GetSubCacheInfo(uuid); sc != nil {
+					s.Mapping += fmt.Sprintf("sub_cache (%s)", sc.Extention)
+				}
+			}
+			if str, err := f.GetCStringAtOffsetForUUID(uuid, match); err == nil {
+				s.String = strings.TrimSuffix(strings.TrimSpace(str), "\n")
+			}
+			if addr, err := f.GetVMAddressForUUID(uuid, match); err == nil {
+				s.Address = addr
+				if image, err := f.GetImageContainingVMAddr(addr); err == nil {
+					s.Image = filepath.Base(image.Name)
+				}
+			}
+			strs = append(strs, s)
+		}
+	}
+	if len(matches) > 0 {
+		return strs, nil
+	}
+
+	log.Warn("No strings found in dyld_shared_cache using FAST byte search, falling back to slow MachO parsing/regex search...")
 
 	for _, i := range f.Images {
 		m, err := i.GetMacho()

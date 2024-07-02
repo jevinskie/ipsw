@@ -26,6 +26,7 @@ __debug_*
 *.ipsw
 *.zip
 *.im4p
+*.img4
 *_Restore
 usr
 *.xz
@@ -33,6 +34,7 @@ usr
 *.s
 .DS_Store
 *.dmg
+*.aea
 *.signature
 
 # Repo

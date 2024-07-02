@@ -90,6 +90,7 @@ func GetLogTypes() (*LogTypes, error) {
 type Config struct {
 	All      bool
 	Running  bool
+	Process  string
 	Unslid   bool
 	Demangle bool
 }
@@ -175,6 +176,23 @@ type IpsMetadata struct {
 	ShareWithAppDevs int       `json:"share_with_app_devs,omitempty"`
 	IsFirstParty     int       `json:"is_first_party,omitempty"`
 	RootsInstalled   int       `json:"roots_installed,omitempty"`
+}
+
+func (m IpsMetadata) Version() string {
+	re := regexp.MustCompile(`(?P<version>[0-9.]+) \((?P<build>\w+)\)$`)
+	matches := re.FindStringSubmatch(m.OsVersion)
+	if len(matches) != 3 {
+		return m.OsVersion
+	}
+	return matches[1]
+}
+func (m IpsMetadata) Build() string {
+	re := regexp.MustCompile(`(?P<version>[0-9.]+) \((?P<build>\w+)\)$`)
+	matches := re.FindStringSubmatch(m.OsVersion)
+	if len(matches) != 3 {
+		return m.OsVersion
+	}
+	return matches[2]
 }
 
 type MemoryStatus struct {
@@ -947,6 +965,10 @@ func (i *Ips) String() string {
 						if notRunning {
 							continue
 						}
+					} else if len(i.Config.Process) > 0 {
+						if p.Name != i.Config.Process {
+							continue
+						}
 					} else {
 						continue
 					}
@@ -962,6 +984,10 @@ func (i *Ips) String() string {
 					if !i.Config.All {
 						if i.Config.Running {
 							if !slices.Contains(t.State, "TH_RUN") {
+								continue
+							}
+						} else if len(i.Config.Process) > 0 {
+							if p.Name != i.Config.Process {
 								continue
 							}
 						} else {
