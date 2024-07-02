@@ -689,6 +689,101 @@ func GetStrings(f *dyld.File, pattern string) ([]String, error) {
 	return strs, nil
 }
 
+// GetStringsFixed returns a list of strings from a dyld_shared_cache file for a given fixed string
+func GetStringsFixed(f *dyld.File, fixed_search_string string) ([]String, error) {
+	var strs []String
+
+	if len(fixed_search_string) == 0 {
+		return nil, fmt.Errorf("fixed_search_string cannot be empty")
+	}
+
+	for _, i := range f.Images {
+		m, err := i.GetMacho()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create MachO for image %s: %v", i.Name, err)
+		}
+
+		// cstrings
+		for _, sec := range m.Sections {
+			if sec.Flags.IsCstringLiterals() || sec.Seg == "__TEXT" && sec.Name == "__const" {
+				uuid, off, err := f.GetOffset(sec.Addr)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get offset for %s.%s: %v", sec.Seg, sec.Name, err)
+				}
+				dat, err := f.ReadBytesForUUID(uuid, int64(off), sec.Size)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read cstrings in %s.%s: %v", sec.Seg, sec.Name, err)
+				}
+
+				csr := bytes.NewBuffer(dat)
+
+				for {
+					pos := sec.Addr + uint64(csr.Cap()-csr.Len())
+
+					s, err := csr.ReadString('\x00')
+
+					if err == io.EOF {
+						break
+					}
+
+					if err != nil {
+						return nil, fmt.Errorf("failed to read string: %v", err)
+					}
+
+					s = strings.Trim(s, "\x00")
+
+					if len(s) > 0 {
+						if (sec.Seg == "__TEXT" && sec.Name == "__const") && !utils.IsASCII(s) {
+							continue // skip non-ascii strings when dumping __TEXT.__const
+						}
+						if fixed_search_string == s {
+							strs = append(strs, String{
+								Address: pos,
+								Image:   filepath.Base(i.Name),
+								String:  s,
+							})
+						}
+					}
+				}
+			}
+		}
+
+		// objc cfstrings
+		if cfstrs, err := m.GetCFStrings(); err == nil {
+			if len(cfstrs) > 0 {
+				for _, cfstr := range cfstrs {
+					if fixed_search_string == cfstr.Name {
+						strs = append(strs, String{
+							Address: cfstr.Address,
+							Image:   filepath.Base(i.Name),
+							String:  cfstr.Name,
+						})
+					}
+				}
+			}
+		}
+
+		// swift small string literals
+		if info, err := m.GetObjCImageInfo(); err == nil {
+			if info != nil && info.HasSwift() {
+				if ss, err := mcmd.FindSwiftStrings(m); err == nil {
+					for addr, s := range ss {
+						if fixed_search_string == s {
+							strs = append(strs, String{
+								Address: addr,
+								Image:   filepath.Base(i.Name),
+								String:  s,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return strs, nil
+}
+
 // GetWebkitVersion returns the WebKit version from a dyld_shared_cache file
 func GetWebkitVersion(f *dyld.File) (string, error) {
 	image, err := f.Image("/System/Library/Frameworks/WebKit.framework/WebKit")

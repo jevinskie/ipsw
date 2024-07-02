@@ -39,7 +39,9 @@ import (
 func init() {
 	DyldCmd.AddCommand(StrSearchCmd)
 	StrSearchCmd.Flags().StringP("pattern", "p", "", "Regex match strings")
+	StrSearchCmd.Flags().StringP("fixed", "f", "", "Fixed match strings")
 	viper.BindPFlag("dyld.str.pattern", StrSearchCmd.Flags().Lookup("pattern"))
+	viper.BindPFlag("dyld.str.fixed", StrSearchCmd.Flags().Lookup("fixed"))
 }
 
 // StrSearchCmd represents the str command
@@ -58,7 +60,14 @@ var StrSearchCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		pattern := viper.GetString("dyld.str.pattern")
+		var pattern string
+		if viper.IsSet("dyld.str.pattern") {
+			pattern = viper.GetString("dyld.str.pattern")
+		} else if viper.IsSet("dyld.str.fixed") {
+			pattern = viper.GetString("dyld.str.fixed")
+		} else {
+			return fmt.Errorf("must use -p/--pattern or -f/--fixed")
+		}
 
 		dscPath := filepath.Clean(args[0])
 
@@ -87,7 +96,14 @@ var StrSearchCmd = &cobra.Command{
 		defer f.Close()
 
 		log.Info("Searching for strings...")
-		strs, err := dscCmd.GetStrings(f, pattern)
+		var strs []dscCmd.String
+		if viper.IsSet("dyld.str.pattern") {
+			strs, err = dscCmd.GetStrings(f, pattern)
+		} else if viper.IsSet("dyld.str.fixed") {
+			strs, err = dscCmd.GetStringsFixed(f, pattern)
+		} else {
+			return fmt.Errorf("somehow pattern and fixed were both nil")
+		}
 		if err != nil {
 			return err
 		}
