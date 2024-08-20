@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/alecthomas/chroma/v2/quick"
@@ -806,7 +807,6 @@ var machoInfoCmd = &cobra.Command{
 				fmt.Println("=======")
 			}
 			var label string
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 			if m.Symtab != nil {
 				label = "Symtab"
 				fmt.Printf("\n%s\n", label)
@@ -814,7 +814,6 @@ var machoInfoCmd = &cobra.Command{
 				undeflush := false
 				for _, sym := range m.Symtab.Syms {
 					if sym.Type.IsUndefinedSym() && !undeflush {
-						w.Flush()
 						undeflush = true
 					}
 					if doDemangle {
@@ -839,12 +838,11 @@ var machoInfoCmd = &cobra.Command{
 						}
 					}
 					if sym.Value == 0 {
-						fmt.Fprintf(w, "              %s\n", strings.Join([]string{symTypeColor(sym.GetType(m)), symNameColor(sym.Name), symLibColor(sym.GetLib(m))}, "\t"))
+						fmt.Printf("              %s\n", strings.Join([]string{symTypeColor(sym.GetType(m)), symNameColor(sym.Name), symLibColor(sym.GetLib(m))}, "\t"))
 					} else {
-						fmt.Fprintf(w, "%s:  %s\n", symAddrColor("%#09x", sym.Value), strings.Join([]string{symTypeColor(sym.GetType(m)), symNameColor(sym.Name), symLibColor(sym.GetLib(m))}, "\t"))
+						fmt.Printf("%s:  %s\n", symAddrColor("%#09x", sym.Value), strings.Join([]string{symTypeColor(sym.GetType(m)), symNameColor(sym.Name), symLibColor(sym.GetLib(m))}, "\t"))
 					}
 				}
-				w.Flush()
 			} else {
 				fmt.Println("  - no symbol table")
 			}
@@ -869,9 +867,8 @@ var machoInfoCmd = &cobra.Command{
 				fmt.Printf("\n%s\n", label)
 				fmt.Println(strings.Repeat("-", len(label)))
 				for _, export := range exports {
-					fmt.Fprintf(w, "%s:  %s\t%s\n", symAddrColor("%#09x", export.Address), symTypeColor(export.Flags.String()), symNameColor(export.Name))
+					fmt.Printf("%s:  %s\t%s\n", symAddrColor("%#09x", export.Address), symTypeColor(export.Flags.String()), symNameColor(export.Name))
 				}
-				w.Flush()
 			}
 			if m.DyldExportsTrie() != nil && m.DyldExportsTrie().Size > 0 {
 				label = "Dyld Exports Trie"
@@ -889,9 +886,8 @@ var machoInfoCmd = &cobra.Command{
 							export.Name = demangle.Do(export.Name, false, false)
 						}
 					}
-					fmt.Fprintf(w, "%s:  %s\t%s\n", symAddrColor("%#09x", export.Address), symTypeColor(export.Flags.String()), symNameColor(export.Name))
+					fmt.Printf("%s:  %s\t%s\n", symAddrColor("%#09x", export.Address), symTypeColor(export.Flags.String()), symNameColor(export.Name))
 				}
-				w.Flush()
 			}
 			println()
 		}
@@ -951,7 +947,7 @@ var machoInfoCmd = &cobra.Command{
 			}
 			// TODO: add option to dump all strings - https://github.com/robpike/strings/blob/master/strings.go
 			for _, sec := range m.Sections {
-				if sec.Flags.IsCstringLiterals() || sec.Seg == "__TEXT" && sec.Name == "__const" {
+				if sec.Flags.IsCstringLiterals() || sec.Name == "__os_log" || (sec.Seg == "__TEXT" && sec.Name == "__const") {
 					off, err := m.GetOffset(sec.Addr)
 					if err != nil {
 						return fmt.Errorf("failed to get offset for %s.%s: %v", sec.Seg, sec.Name, err)
@@ -961,26 +957,28 @@ var machoInfoCmd = &cobra.Command{
 						return fmt.Errorf("failed to read cstring data in %s.%s: %v", sec.Seg, sec.Name, err)
 					}
 
+					fmt.Printf("\n[%s.%s]\n", sec.Seg, sec.Name)
+
 					csr := bytes.NewBuffer(dat)
 
 					for {
 						pos := sec.Addr + uint64(csr.Cap()-csr.Len())
 
 						s, err := csr.ReadString('\x00')
-
-						if err == io.EOF {
-							break
-						}
-
 						if err != nil {
+							if err == io.EOF {
+								break
+							}
 							return fmt.Errorf("failed to read string: %v", err)
 						}
 
 						s = strings.Trim(s, "\x00")
 
 						if len(s) > 0 {
-							if (sec.Seg == "__TEXT" && sec.Name == "__const") && !utils.IsASCII(s) { // TODO: does this skip unicode strings?
-								continue // skip non-ascii strings when dumping __TEXT.__const
+							for _, r := range s {
+								if r > unicode.MaxASCII || !unicode.IsPrint(r) {
+									continue // skip non-ascii strings
+								}
 							}
 							fmt.Printf("%s: %s\n", symAddrColor("%#09x", pos), symNameColor(fmt.Sprintf("%#v", s)))
 						}

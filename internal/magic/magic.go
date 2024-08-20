@@ -23,6 +23,11 @@ const (
 	Magic64    Magic = 0xfeedfacf
 	MagicFatBE Magic = 0xcafebabe
 	MagicFatLE Magic = 0xbebafeca
+	MagicZip   Magic = 0x504b0304
+	MagicYAA1  Magic = 0x31414159 // "YAA1"
+	MagicAA01  Magic = 0x31304141 // "AA01"
+	MagicAEA1  Magic = 0x41454131 // "AEA1"
+	MagicPBZX        = 0x70627a78 // "pbzx"
 )
 
 func IsMachO(filePath string) (bool, error) {
@@ -150,4 +155,114 @@ func IsBUND(filePath string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func IsZip(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicZip:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+func IsZipData(r io.Reader) (bool, error) {
+	magic := make([]byte, 4)
+	if _, err := r.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicZip:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func IsPBZX(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicPBZX:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func IsPBZXData(r io.Reader) (bool, error) {
+	magic := make([]byte, 4)
+	if _, err := r.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicPBZX:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func IsAA(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicYAA1, MagicAA01:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func IsAEA(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicAEA1:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func IsAEAData(rc io.Reader) (bool, error) {
+	magic := make([]byte, 4)
+	if _, err := rc.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	case MagicAEA1:
+		return true, nil
+	default:
+		return false, nil
+	}
 }

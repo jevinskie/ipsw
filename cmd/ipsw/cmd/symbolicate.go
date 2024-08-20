@@ -23,6 +23,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,6 +49,11 @@ func init() {
 	symbolicateCmd.Flags().StringP("proc", "p", "", "Filter crashlog by process name")
 	symbolicateCmd.Flags().BoolP("unslide", "u", false, "Unslide the crashlog for easier static analysis")
 	symbolicateCmd.Flags().BoolP("demangle", "d", false, "Demangle symbol names")
+	symbolicateCmd.Flags().Bool("hex", false, "Display function offsets in hexadecimal")
+	symbolicateCmd.Flags().StringP("server", "s", "", "Symbol Server DB URL")
+	symbolicateCmd.Flags().String("pem-db", "", "AEA pem DB JSON file")
+	symbolicateCmd.Flags().String("signatures", "", "Path to signatures folder")
+	symbolicateCmd.Flags().String("extra", "x", "Path to folder with extra files for symbolication")
 	// symbolicateCmd.Flags().String("cache", "", "Path to .a2s addr to sym cache file (speeds up analysis)")
 	symbolicateCmd.MarkZshCompPositionalArgumentFile(2, "dyld_shared_cache*")
 	viper.BindPFlag("symbolicate.all", symbolicateCmd.Flags().Lookup("all"))
@@ -55,6 +61,11 @@ func init() {
 	viper.BindPFlag("symbolicate.proc", symbolicateCmd.Flags().Lookup("proc"))
 	viper.BindPFlag("symbolicate.unslide", symbolicateCmd.Flags().Lookup("unslide"))
 	viper.BindPFlag("symbolicate.demangle", symbolicateCmd.Flags().Lookup("demangle"))
+	viper.BindPFlag("symbolicate.hex", symbolicateCmd.Flags().Lookup("hex"))
+	viper.BindPFlag("symbolicate.server", symbolicateCmd.Flags().Lookup("server"))
+	viper.BindPFlag("symbolicate.pem-db", symbolicateCmd.Flags().Lookup("pem-db"))
+	viper.BindPFlag("symbolicate.signatures", symbolicateCmd.Flags().Lookup("signatures"))
+	viper.BindPFlag("symbolicate.extra", symbolicateCmd.Flags().Lookup("extra"))
 }
 
 // TODO: handle all edge cases from `/Applications/Xcode.app/Contents/SharedFrameworks/DVTFoundation.framework/Versions/A/Resources/symbolicatecrash` and handle spindumps etc
@@ -89,6 +100,10 @@ var symbolicateCmd = &cobra.Command{
 		unslide := viper.GetBool("symbolicate.unslide")
 		// cacheFile, _ := cmd.Flags().GetString("cache")
 		demangleFlag := viper.GetBool("symbolicate.demangle")
+		asHex := viper.GetBool("symbolicate.hex")
+		pemDB := viper.GetString("symbolicate.pem-db")
+		signaturesDir := viper.GetString("symbolicate.signatures")
+		extrasDir := viper.GetString("symbolicate.extra")
 		/* validate flags */
 		if (Verbose || all) && len(proc) > 0 {
 			return fmt.Errorf("cannot use --verbose OR --all WITH --proc")
@@ -106,19 +121,39 @@ var symbolicateCmd = &cobra.Command{
 		switch hdr.BugType {
 		case "210", "309": // NEW JSON STYLE CRASHLOG
 			ips, err := crashlog.OpenIPS(args[0], &crashlog.Config{
-				All:      all || Verbose,
-				Running:  running,
-				Process:  proc,
-				Unslid:   unslide,
-				Demangle: demangleFlag,
+				All:           all || Verbose,
+				Running:       running,
+				Process:       proc,
+				Unslid:        unslide,
+				Demangle:      demangleFlag,
+				Hex:           asHex,
+				PemDB:         pemDB,
+				SignaturesDir: signaturesDir,
+				ExtrasDir:     extrasDir,
+				Verbose:       Verbose,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to parse IPS file: %v", err)
 			}
 
 			if len(args) < 2 && hdr.BugType == "210" {
-				log.Warnf("please supply %s %s IPSW for symbolication", ips.Payload.Product, ips.Header.OsVersion)
+				if viper.IsSet("symbolicate.server") {
+					u, err := url.ParseRequestURI(viper.GetString("symbolicate.server"))
+					if err != nil {
+						return fmt.Errorf("failed to parse symbol server URL: %v", err)
+					}
+					if u.Scheme == "" || u.Host == "" {
+						return fmt.Errorf("invalid symbol server URL: %s (needs a valid schema AND host)", u.String())
+					}
+					log.WithField("server", u.String()).Info("Symbolicating 210 Panic with Symbol Server")
+					if err := ips.Symbolicate210WithDatabase(u.String()); err != nil {
+						return err
+					}
+				} else {
+					log.Warnf("please supply %s %s IPSW for symbolication", ips.Payload.Product, ips.Header.OsVersion)
+				}
 			} else {
+				// TODO: use IPSW to populate symbol server if both are supplied
 				if hdr.BugType == "210" {
 					/* validate IPSW */
 					i, err := info.Parse(args[1])
