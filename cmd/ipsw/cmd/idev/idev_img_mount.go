@@ -1,5 +1,5 @@
 /*
-Copyright © 2018-2024 blacktop
+Copyright © 2018-2025 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -78,7 +78,7 @@ var idevImgMountCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 		// flags
-		udid, _ := cmd.Flags().GetString("udid")
+		udid := viper.GetString("idev.udid")
 		xcode := viper.GetString("idev.img.mount.xcode")
 		dmgPath := viper.GetString("idev.img.mount.ddi-img")
 		trustcachePath := viper.GetString("idev.img.mount.trustcache")
