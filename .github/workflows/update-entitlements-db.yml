@@ -1,0 +1,77 @@
+name: Update Entitlements DB
+
+on:
+  schedule:
+    - cron: '0 19 * * *'  # daily at 11:00 PST (19:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  update-entitlements-db:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build ipsw CLI
+        run: |
+          go build -o ipsw ./cmd/ipsw
+
+      - name: Determine latest IPSW URL
+        id: get-ipsw
+        run: |
+          # Get the latest IPSW URL
+          echo "CURRENT_IPSW_URL=$(./ipsw dl ipsw --device iPhone17,1 --latest --urls)" >> $GITHUB_ENV
+
+      - name: Check for new IPSW
+        id: check-ipsw
+        run: |
+          LAST=$(jq -r '.latest_ipsw.url // ""' hack/.watch_cache)
+          echo "Last cached IPSW URL: $LAST"
+          echo "Current IPSW URL: $CURRENT_IPSW_URL"
+          if [ "$LAST" = "$CURRENT_IPSW_URL" ]; then
+            echo "No new IPSW found; skipping"
+            echo "should_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "New IPSW found; proceeding with update"
+            echo "should_update=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download IPSW
+        if: steps.check-ipsw.outputs.should_update == 'true'
+        run: |
+          echo "Downloading IPSW: $CURRENT_IPSW_URL"
+          curl -L "$CURRENT_IPSW_URL" -o latest.ipsw
+          echo "IPSW downloaded: $(ls -lh latest.ipsw)"
+
+      - name: Update entitlements database
+        if: steps.check-ipsw.outputs.should_update == 'true'
+        run: |
+          echo "Updating Supabase entitlements database..."
+          ./ipsw ent \
+            --pg-host  ${{ secrets.SUPABASE_HOST }} \
+            --pg-port 6543 \
+            --pg-user postgres \
+            --pg-password "${{ secrets.SUPABASE_PASSWORD }}" \
+            --pg-database postgres \
+            --pg-sslmode require \
+            --ipsw latest.ipsw
+          echo "Database update completed successfully"
+
+      - name: Update cache and commit
+        if: steps.check-ipsw.outputs.should_update == 'true'
+        run: |
+          # Update the cache file with the new IPSW URL
+          jq --arg url "$CURRENT_IPSW_URL" '.latest_ipsw = {"url": $url}' hack/.watch_cache > hack/.watch_cache.tmp
+          mv hack/.watch_cache.tmp hack/.watch_cache
+          
+          # Configure git
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Commit only the cache file (no more SQLite DB to commit)
+          git add hack/.watch_cache
+          git commit -m "chore(ents): update entitlements DB to $CURRENT_IPSW_URL [skip ci]" || echo "No changes to commit"
+          git push 

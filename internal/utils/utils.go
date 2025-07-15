@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -25,19 +26,40 @@ import (
 var normalPadding = cli.Default.Padding
 
 // Retry will retry a function f a number of attempts with a sleep duration in between
-func Retry(attempts int, sleep time.Duration, f func() error) (err error) {
+func Retry(attempts int, sleep time.Duration, f func() error) error {
+	_, err := RetryWithResult(attempts, sleep, func() (struct{}, error) {
+		return struct{}{}, f()
+	})
+	return err
+}
+
+type StopRetryingError struct {
+	Err error
+}
+
+func (e *StopRetryingError) Error() string {
+	return e.Err.Error()
+}
+
+// RetryWithResult will retry a function f a number of attempts with a sleep duration in between, returning the result if successful
+func RetryWithResult[T any](attempts int, sleep time.Duration, f func() (T, error)) (result T, err error) {
 	for i := 0; i < attempts; i++ {
 		if i > 0 {
 			Indent(log.Debug, 2)(fmt.Sprintf("retrying after error: %s", err))
 			time.Sleep(sleep)
 			sleep *= 2
 		}
-		err = f()
+		result, err = f()
 		if err == nil {
-			return nil
+			return result, nil
+		}
+		// If StopRetryingError is returned, unwrap and return immediately
+		var stopErr *StopRetryingError
+		if errors.As(err, &stopErr) {
+			return result, stopErr.Err
 		}
 	}
-	return fmt.Errorf("after %d attempts, last error: %s", attempts, err)
+	return result, fmt.Errorf("after %d attempts, last error: %s", attempts, err)
 }
 
 func RandomAgent() string {
@@ -63,12 +85,7 @@ func Indent(f func(s string), level int) func(string) {
 
 // Uint64SliceContains returns true if uint64 slice contains given uint64
 func Uint64SliceContains(slice []uint64, item uint64) bool {
-	for _, s := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, item)
 }
 
 // Unique returns a slice with only unique elements
@@ -85,20 +102,16 @@ func Unique[T comparable](s []T) []T {
 }
 
 func UniqueAppend[T comparable](slice []T, i T) []T {
-	for _, ele := range slice {
-		if ele == i {
-			return slice
-		}
+	if slices.Contains(slice, i) {
+		return slice
 	}
 	return append(slice, i)
 }
 
 func UniqueConcat[T comparable](slice []T, in []T) []T {
 	for _, i := range in {
-		for _, ele := range slice {
-			if ele == i {
-				return slice
-			}
+		if slices.Contains(slice, i) {
+			return slice
 		}
 		slice = append(slice, i)
 	}
@@ -115,7 +128,7 @@ func Zip[T, U any](ts []T, us []U) ([]Pair[T, U], error) {
 		return nil, fmt.Errorf("slices have different lengths")
 	}
 	pairs := make([]Pair[T, U], len(ts))
-	for i := 0; i < len(ts); i++ {
+	for i := range ts {
 		pairs[i] = Pair[T, U]{ts[i], us[i]}
 	}
 	return pairs, nil

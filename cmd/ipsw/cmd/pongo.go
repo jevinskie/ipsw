@@ -27,6 +27,7 @@ import (
 	"archive/zip"
 	"crypto/aes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,6 @@ import (
 	"time"
 
 	"github.com/apex/log"
-	icmd "github.com/blacktop/ipsw/internal/commands/img4"
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/img4"
@@ -66,7 +66,6 @@ var pongoCmd = &cobra.Command{
 	Aliases:       []string{"p"},
 	Short:         "PongoOS Terminal",
 	Args:          cobra.ExactArgs(1),
-	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -100,7 +99,12 @@ var pongoCmd = &cobra.Command{
 			destPath = filepath.Join(filepath.Clean(viper.GetString("pongo.output")), folder)
 
 			log.Info("Extracting im4p kbags")
-			kbags, err = img4.ParseZipKeyBags(zr.File, i, "")
+			kbags, err = img4.GetKeybagsFromIPSW(zr.File, img4.KeybagMetaData{
+				Type:    i.Plists.Type,
+				Version: i.Plists.BuildManifest.ProductVersion,
+				Build:   i.Plists.BuildManifest.ProductBuildVersion,
+				Devices: i.Plists.Restore.SupportedProductTypes,
+			}, "")
 			if err != nil {
 				return fmt.Errorf("failed to parse im4p kbags: %v", err)
 			}
@@ -136,7 +140,12 @@ var pongoCmd = &cobra.Command{
 			defer zr.Close()
 
 			log.Info("Extracting im4p kbags")
-			kbags, err = img4.ParseZipKeyBags(zr.File, i, "")
+			kbags, err = img4.GetKeybagsFromIPSW(zr.File, img4.KeybagMetaData{
+				Type:    i.Plists.Type,
+				Version: i.Plists.BuildManifest.ProductVersion,
+				Build:   i.Plists.BuildManifest.ProductBuildVersion,
+				Devices: i.Plists.Restore.SupportedProductTypes,
+			}, "")
 			if err != nil {
 				return fmt.Errorf("failed to parse IPSW im4p kbags: %v", err)
 			}
@@ -209,13 +218,13 @@ var pongoCmd = &cobra.Command{
 			for _, kbag := range kbags.Files {
 				fname := filepath.Join(destPath, kbag.Name)
 				utils.Indent(log.Info, 2)(fmt.Sprintf("Decrypting file to %s", fname+".dec"))
-				if err := icmd.DecryptPayload(fname, fname+".dec", kbag.Keybags[2].IV, kbag.Keybags[2].Key); err != nil {
+				if err := img4.DecryptPayload(fname, fname+".dec", kbag.Keybags[2].IV, kbag.Keybags[2].Key); err != nil {
 					return fmt.Errorf("failed to decrypt payload: %v", err)
 				}
 			}
 		}
 
-		kbJSON, err := kbags.MarshalJSON()
+		kbJSON, err := json.Marshal(kbags)
 		if err != nil {
 			return fmt.Errorf("failed to marshal keybags: %v", err)
 		}

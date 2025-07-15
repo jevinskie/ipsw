@@ -11,10 +11,10 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho/pkg/trie"
 	"github.com/blacktop/go-macho/types"
-	"github.com/olekukonko/tablewriter"
+	"github.com/blacktop/ipsw/pkg/table"
 )
 
-//go:generate stringer -type=closureType,linkKind -output closure_string.go
+//go:generate go tool stringer -type=closureType,linkKind -output closure_string.go
 
 type closureType uint32
 
@@ -169,13 +169,13 @@ func (i CImage) String(d *File, verbose bool) string {
 			})
 			prevFOff += ds.FilePageCount() * i.PageSize()
 		}
-		table := tablewriter.NewWriter(tableString)
-		table.SetHeader([]string{"File Offset", "File Size", "VM Size", "Prot"})
-		table.SetBorders(tablewriter.Border{Left: true, Top: false, Right: true, Bottom: false})
-		table.SetCenterSeparator("|")
-		table.AppendBulk(mdata)
-		table.SetAlignment(tablewriter.ALIGN_LEFT)
-		table.Render()
+		tbl := table.NewStringBuilderTableWriter(tableString)
+		tbl.SetHeader([]string{"File Offset", "File Size", "VM Size", "Prot"})
+		tbl.SetBorders(nil)
+		tbl.SetCenterSeparator("|")
+		tbl.AppendBulk(mdata)
+		tbl.SetAlignment(1)
+		tbl.Render()
 
 		diskSegs += tableString.String()
 	}
@@ -468,7 +468,7 @@ func (p protocolISAFixup) String() string {
 type SelectorReferenceFixup uint32
 
 func (s SelectorReferenceFixup) String() string {
-	return fmt.Sprintf("offset: %#x, %s", s, chainEntry(s))
+	return fmt.Sprintf("offset: %#x, %s", uint32(s), chainEntry(s))
 }
 
 type chainEntry uint32

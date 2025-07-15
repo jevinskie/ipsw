@@ -18,6 +18,7 @@ ipsw kernel extract <KERNELCACHE> <KEXT> [flags]
 
 ```
   -a, --all             Extract all KEXTs
+  -e, --arch string     Which architecture to use for fat/universal MachO
   -h, --help            help for extract
       --output string   Directory to extract KEXTs to
 ```

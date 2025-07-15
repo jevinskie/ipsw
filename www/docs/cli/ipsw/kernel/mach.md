@@ -17,7 +17,8 @@ ipsw kernel mach [flags]
 ### Options
 
 ```
-  -h, --help   help for mach
+  -a, --arch string   Which architecture to use for fat/universal MachO
+  -h, --help          help for mach
 ```
 
 ### Options inherited from parent commands

@@ -276,7 +276,9 @@ func (i *Info) String() string {
 			}
 			iStr += fmt.Sprintf("\n%s\n", prodName)
 			iStr += fmt.Sprintf(" > %s_%s_%s\n", dt.ProductType, strings.ToUpper(dt.BoardConfig), i.Plists.BuildManifest.ProductBuildVersion)
-			iStr += fmt.Sprintf("   - TimeStamp: %s\n", dt.Timestamp.Format("02 Jan 2006 15:04:05 MST"))
+			if !dt.Timestamp.IsZero() {
+				iStr += fmt.Sprintf("   - TimeStamp: %s\n", dt.Timestamp.Format("02 Jan 2006 15:04:05 MST"))
+			}
 			if len(kcs[strings.ToLower(dt.BoardConfig)]) > 0 {
 				iStr += fmt.Sprintf("   - KernelCache: %s\n", strings.Join(kcs[strings.ToLower(dt.BoardConfig)], ", "))
 			}
@@ -415,6 +417,11 @@ func (i *Info) GetFileSystemOsDmg() (string, error) {
 		} else {
 			return "", fmt.Errorf("multiple filesystem DMGs found")
 		}
+	} else if i.Plists != nil && i.Plists.Restore != nil {
+		if dmg, ok := i.Plists.Restore.SystemRestoreImages["User"]; ok {
+			return dmg, nil
+		}
+		return "", fmt.Errorf("no BuildManifest.plist AND no SystemRestoreImages (used in older IPSWs) found")
 	}
 	return "", fmt.Errorf("no BuildManifest.plist found")
 }
@@ -495,6 +502,17 @@ func (i *Info) GetCPU(board string) string {
 // GetFolder returns a folder name for all the devices included in an IPSW
 func (i *Info) GetFolder(device ...string) (string, error) {
 	if i.Plists.BuildManifest == nil {
+		if i.Plists.Type == "OTA" && i.Plists.OTAInfo.CFBundleName == "SimulatorRuntimeAsset" {
+			typ, found := strings.CutPrefix(i.Plists.OTAInfo.CFBundleIdentifier, "com.apple.MobileAsset.")
+			if !found {
+				typ = "Simulator"
+			}
+			return fmt.Sprintf("%s_%s_%s",
+				i.Plists.OTAInfo.MobileAssetProperties.SimulatorVersion,
+				i.Plists.OTAInfo.MobileAssetProperties.Build,
+				typ,
+			), nil
+		}
 		return "", fmt.Errorf("no BuildManifest.plist found")
 	}
 
@@ -703,7 +721,7 @@ func getAbbreviatedDevListFolder(devices []string) string {
 }
 
 // Parse parses plist files in a local ipsw file
-func Parse(ipswPath string) (*Info, error) {
+func Parse(ipswPath string, keys ...string) (*Info, error) {
 	var err error
 
 	i := &Info{}
@@ -712,7 +730,7 @@ func Parse(ipswPath string) (*Info, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse plists: %v", err)
 	}
-	i.DeviceTrees, err = devicetree.Parse(ipswPath)
+	i.DeviceTrees, err = devicetree.Parse(ipswPath, keys...)
 	if err != nil {
 		if errors.Is(err, devicetree.ErrEncryptedDeviceTree) { // FIXME: this is a hack to avoid stopping the parsing of the metadata info
 			log.Error(err.Error())
@@ -725,7 +743,7 @@ func Parse(ipswPath string) (*Info, error) {
 }
 
 // ParseZipFiles parses plist files and devicetree in a remote zip file
-func ParseZipFiles(files []*zip.File) (*Info, error) {
+func ParseZipFiles(files []*zip.File, keys ...string) (*Info, error) {
 	var err error
 
 	i := &Info{}
@@ -734,7 +752,7 @@ func ParseZipFiles(files []*zip.File) (*Info, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse plists: %v", err)
 	}
-	i.DeviceTrees, err = devicetree.ParseZipFiles(files)
+	i.DeviceTrees, err = devicetree.ParseZipFiles(files, keys...)
 	if err != nil {
 		if errors.Is(err, devicetree.ErrEncryptedDeviceTree) { // FIXME: this is a hack to avoid stopping the parsing of the metadata info
 			log.Error(err.Error())

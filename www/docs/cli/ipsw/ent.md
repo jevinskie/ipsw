@@ -4,11 +4,11 @@ title: ent
 hide_title: true
 hide_table_of_contents: true
 sidebar_label: ent
-description: Search IPSW filesystem DMG or Folder for MachOs with a given entitlement
+description: Manage and search entitlements database
 ---
 ## ipsw ent
 
-Search IPSW filesystem DMG or Folder for MachOs with a given entitlement
+Manage and search entitlements database
 
 ```
 ipsw ent [flags]
@@ -17,41 +17,54 @@ ipsw ent [flags]
 ### Examples
 
 ```bash
-# Search IPSW for entitlement key
-❯ ipsw ent --ipsw <IPSW> --db /tmp --key platform-application
+# Create SQLite database from IPSW
+❯ ipsw ent --sqlite entitlements.db --ipsw iPhone16,1_18.2_22C150_Restore.ipsw
 
-# Search local folder for entitlement key
-❯ ipsw ent --input /usr/bin --db /tmp --val platform-application
+# Create database from multiple IPSWs
+❯ ipsw ent --sqlite entitlements.db --ipsw *.ipsw
 
-# Search IPSW for entitlement value (i.e. one of the <array> strings)
-❯ ipsw ent --ipsw <IPSW> --db /tmp --val LockdownMode
+# Create PostgreSQL database from IPSW (for Supabase)
+❯ ipsw ent --pg-host db.xyz.supabase.co --pg-user postgres --pg-password your-password --pg-database postgres --ipsw iPhone16,1_18.2_22C150_Restore.ipsw
 
-# Dump entitlements for MachO in IPSW
-❯ ipsw ent --ipsw <IPSW> --db /tmp --file WebContent
+# Search for entitlement key
+❯ ipsw ent --sqlite entitlements.db --key platform-application
 
-# Diff two IPSWs
-❯ ipsw ent --diff --ipsw <PREV_IPSW> --ipsw <NEW_IPSW> --db /tmp
+# Search for entitlement value
+❯ ipsw ent --sqlite entitlements.db --value LockdownMode
 
-# Launch Web UI (http://localhost:3993)
-❯ ipsw ent --ui --ipsw <IPSW>
+# Search for specific file
+❯ ipsw ent --sqlite entitlements.db --file WebContent
+
+# Filter by iOS version and search
+❯ ipsw ent --sqlite entitlements.db --version 18.2 --key sandbox
+
+# Show database statistics
+❯ ipsw ent --sqlite entitlements.db --stats
+
+# Search PostgreSQL database (Supabase)
+❯ ipsw ent --pg-host db.xyz.supabase.co --pg-user postgres --pg-password your-password --pg-database postgres --key sandbox
 ```
 
 ### Options
 
 ```
-      --db string           Folder to r/w entitlement databases
-  -d, --diff                Diff entitlements
-  -f, --file string         Dump entitlements for MachO as plist
-      --file-only           Only output the file path of matches
-  -h, --help                help for ent
-      --input stringArray   Folders of MachOs to analyze
-      --ipsw stringArray    IPSWs to analyze
-  -k, --key string          Entitlement KEY regex to search for
-  -m, --md                  Markdown style output
-      --ui                  Show entitlements Web UI
-      --ui-host string      UI host to server on (default "localhost")
-      --ui-port int         UI port to server on (default 3993)
-  -v, --val string          Entitlement VALUE regex to search for (i.e. <array> strings)
+  -f, --file string          Search for file path pattern
+      --file-only            Only output file paths
+  -h, --help                 help for ent
+      --input stringArray    Folders of MachOs to analyze
+      --ipsw stringArray     IPSWs to process
+  -k, --key string           Search for entitlement key pattern
+      --limit int            Limit number of results (default 100)
+      --pg-database string   PostgreSQL database name
+      --pg-host string       PostgreSQL host
+      --pg-password string   PostgreSQL password
+      --pg-port string       PostgreSQL port (default "5432")
+      --pg-sslmode string    PostgreSQL SSL mode (disable, require, verify-ca, verify-full) (default "require")
+      --pg-user string       PostgreSQL user
+      --sqlite string        Path to SQLite database
+      --stats                Show database statistics
+  -v, --value string         Search for entitlement value pattern
+      --version string       Filter by iOS version
 ```
 
 ### Options inherited from parent commands

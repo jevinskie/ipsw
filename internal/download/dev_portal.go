@@ -65,7 +65,7 @@ const (
 
 	olympusSessionURL = "https://appstoreconnect.apple.com/olympus/v1/session"
 
-	userAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+	userAgent = "Configurator/2.18 (Macintosh; OS X 15.4.1; 24E263) AppleWebKit/0621.1.15.11.10"
 
 	hashcashVersion        = 1
 	hashcashHeader         = "X-APPLE-HC"
@@ -145,9 +145,9 @@ type session struct {
 }
 
 type AppleAccountAuth struct {
-	Credentials      credentials `json:"credentials,omitempty"`
-	DevPortalSession session     `json:"devport_session,omitempty"`
-	AppStoreSession  session     `json:"appstore_session,omitempty"`
+	Credentials      credentials `json:"credentials"`
+	DevPortalSession session     `json:"devport_session"`
+	AppStoreSession  session     `json:"appstore_session"`
 }
 
 // DevDownload are all the downloads from https://developer.apple.com/download/
@@ -160,7 +160,7 @@ type DevDownload struct {
 
 // Downloads listDownloads.action response
 type Downloads struct {
-	CreationTimestamp   time.Time `json:"creationTimestamp,omitempty"`
+	CreationTimestamp   time.Time `json:"creationTimestamp"`
 	ResultCode          int       `json:"resultCode,omitempty"`
 	UserLocale          string    `json:"userLocale,omitempty"`
 	ProtocolVersion     string    `json:"protocolVersion,omitempty"`
@@ -168,7 +168,7 @@ type Downloads struct {
 	ResponseID          string    `json:"responseId,omitempty"`
 	HTTPResponseHeaders struct {
 		SetCookie string `json:"Set-Cookie,omitempty"`
-	} `json:"httpResponseHeaders,omitempty"`
+	} `json:"httpResponseHeaders"`
 	Downloads []MoreDownload
 }
 
@@ -209,9 +209,9 @@ type authOptions struct {
 	TrustedDeviceCount              int                  `json:"trustedDeviceCount,omitempty"`
 	OtherTrustedDeviceClass         string               `json:"otherTrustedDeviceClass,omitempty"`
 	TrustedPhoneNumbers             []trustedPhoneNumber `json:"trustedPhoneNumbers,omitempty"`
-	PhoneNumber                     trustedPhoneNumber   `json:"phoneNumber,omitempty"`
-	TrustedPhoneNumber              trustedPhoneNumber   `json:"trustedPhoneNumber,omitempty"`
-	SecurityCode                    securityCode         `json:"securityCode,omitempty"`
+	PhoneNumber                     trustedPhoneNumber   `json:"phoneNumber"`
+	TrustedPhoneNumber              trustedPhoneNumber   `json:"trustedPhoneNumber"`
+	SecurityCode                    securityCode         `json:"securityCode"`
 	Mode                            string               `json:"mode,omitempty"`
 	Type                            string               `json:"type,omitempty"`
 	AuthenticationType              string               `json:"authenticationType,omitempty"`
@@ -239,12 +239,12 @@ type phoneNumber struct {
 	ID int `json:"id"`
 }
 type phone struct {
-	SecurityCode scode       `json:"securityCode,omitempty"`
-	Number       phoneNumber `json:"phoneNumber,omitempty"`
+	SecurityCode scode       `json:"securityCode"`
+	Number       phoneNumber `json:"phoneNumber"`
 	Mode         string      `json:"mode,omitempty"`
 }
 type trustedDevice struct {
-	SecurityCode scode `json:"securityCode,omitempty"`
+	SecurityCode scode `json:"securityCode"`
 }
 
 type signInResponse struct {
@@ -284,8 +284,8 @@ type olympusResponse struct {
 		LastName  string `json:"lastName,omitempty"`
 		Email     string `json:"emailAddress,omitempty"`
 		PrsID     string `json:"prsId,omitempty"`
-	} `json:"user,omitempty"`
-	Provider           olympusProvider   `json:"provider,omitempty"`
+	} `json:"user"`
+	Provider           olympusProvider   `json:"provider"`
 	Theme              string            `json:"theme,omitempty"`
 	AvailableProviders []olympusProvider `json:"availableProviders,omitempty"`
 	BackingType        string            `json:"backingType,omitempty"`
@@ -319,7 +319,7 @@ type dfile struct {
 	SortOrder    int     `json:"sortOrder,omitempty"`
 	DateCreated  string  `json:"dateCreated,omitempty"`
 	DateModified string  `json:"dateModified,omitempty"`
-	FileFormat   fformat `json:"fileFormat,omitempty"`
+	FileFormat   fformat `json:"fileFormat"`
 }
 
 func (d dfile) URL() string {
@@ -1650,7 +1650,7 @@ func (dp *DevPortal) getDevDownloads() (map[string][]DevDownload, error) {
 					p := li.Find("p")
 					version := ul.Parent().Parent().Parent().Find("h3")
 					ipsws[version.Text()] = append(ipsws[version.Text()], DevDownload{
-						Title: strings.ReplaceAll(a.Text(), "\u00a0", " "),
+						Title: strings.ReplaceAll(strings.ReplaceAll(a.Text(), "\u00a0", " "), "\n\t\t\t\t\t\t", ""),
 						Build: p.Text(),
 						URL:   href,
 						Type:  "ios",

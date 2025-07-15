@@ -2,8 +2,10 @@ package search
 
 import (
 	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,10 +15,11 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
 	fwcmd "github.com/blacktop/ipsw/internal/commands/fw"
-	icmd "github.com/blacktop/ipsw/internal/commands/img4"
 	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/aea"
+	"github.com/blacktop/ipsw/pkg/ftab"
+	"github.com/blacktop/ipsw/pkg/img4"
 	"github.com/blacktop/ipsw/pkg/info"
 )
 
@@ -156,9 +159,9 @@ func ForEachMachoInIPSW(ipswPath, pemDbPath string, handler func(string, *macho.
 	}
 
 	if fsOS, err := i.GetFileSystemOsDmg(); err == nil {
-		log.Info("Scanning filesystem")
+		log.Info("Scanning FileSystem")
 		if err := scanDmg(ipswPath, fsOS, "filesystem", pemDbPath, scanMacho); err != nil {
-			return fmt.Errorf("failed to scan files in filesystem %s: %w", fsOS, err)
+			return fmt.Errorf("failed to scan files in FileSystem %s: %w", fsOS, err)
 		}
 	}
 	if systemOS, err := i.GetSystemOsDmg(); err == nil {
@@ -269,25 +272,43 @@ func ForEachIm4pInIPSW(ipswPath string, handler func(string, *macho.File) error)
 		return fmt.Errorf("failed to unzip im4p: %v", err)
 	}
 
-	for _, im4p := range im4ps {
-		if err := icmd.ExtractPayload(im4p, im4p, false); err != nil {
-			return fmt.Errorf("failed to extract im4p payload: %v", err)
-		}
-		if regexp.MustCompile(`armfw_.*.im4p$`).MatchString(im4p) {
-			out, err := fwcmd.SplitGpuFW(im4p, os.TempDir())
+	for _, im4pFile := range im4ps {
+		if regexp.MustCompile(`armfw_.*.im4p$`).MatchString(im4pFile) {
+			im4p, err := img4.OpenPayload(im4pFile)
 			if err != nil {
-				return fmt.Errorf("failed to split GPU FW: %v", err)
+				return fmt.Errorf("failed to open im4p file %s: %v", im4pFile, err)
 			}
-			for _, f := range out {
-				if m, err := macho.Open(f); err == nil {
-					if err := handler("agx_"+filepath.Base(f), m); err != nil {
-						return fmt.Errorf("failed to handle macho %s: %v", f, err)
+			im4pData, err := im4p.GetData()
+			if err != nil {
+				return fmt.Errorf("failed to get data from im4p file %s: %v", im4pFile, err)
+			}
+			ftab, err := ftab.Parse(bytes.NewReader(im4pData))
+			if err != nil {
+				return fmt.Errorf("failed to parse ftab: %v", err)
+			}
+			for _, entry := range ftab.Entries {
+				data, err := io.ReadAll(entry)
+				if err != nil {
+					return fmt.Errorf("failed to read ftab entry: %v", err)
+				}
+				if m, err := macho.NewFile(bytes.NewReader(data)); err == nil {
+					name := "agx_" + filepath.Base(string(entry.Tag[:]))
+					if err := handler(name, m); err != nil {
+						return fmt.Errorf("failed to handle macho %s: %v", name, err)
 					}
-					m.Close()
 				}
 			}
-		} else if regexp.MustCompile(`.*exclavecore_bundle.*im4p$`).MatchString(im4p) {
-			out, err := fwcmd.Extract(im4p, os.TempDir())
+			ftab.Close()
+		} else if regexp.MustCompile(`.*exclavecore_bundle.*im4p$`).MatchString(im4pFile) {
+			im4p, err := img4.OpenPayload(im4pFile)
+			if err != nil {
+				return fmt.Errorf("failed to open im4p file %s: %v", im4pFile, err)
+			}
+			data, err := im4p.GetData()
+			if err != nil {
+				return fmt.Errorf("failed to get data from im4p file %s: %v", im4pFile, err)
+			}
+			out, err := fwcmd.ExtractExclaveCores(data, os.TempDir())
 			if err != nil {
 				return fmt.Errorf("failed to split exclave apps FW: %v", err)
 			}
@@ -300,11 +321,21 @@ func ForEachIm4pInIPSW(ipswPath string, handler func(string, *macho.File) error)
 				}
 			}
 		} else {
-			if m, err := macho.Open(im4p); err == nil {
-				if err := handler(filepath.Base(im4p), m); err != nil {
-					return fmt.Errorf("failed to handle macho %s: %v", im4p, err)
+			im4p, err := img4.OpenPayload(im4pFile)
+			if err != nil {
+				return fmt.Errorf("failed to open im4p file %s: %v", im4pFile, err)
+			}
+			data, err := im4p.GetData()
+			if err != nil {
+				return fmt.Errorf("failed to get data from im4p file %s: %v", im4pFile, err)
+			}
+			if m, err := macho.NewFile(bytes.NewReader(data)); err == nil {
+				if err := handler(filepath.Base(im4pFile), m); err != nil {
+					return fmt.Errorf("failed to handle macho %s: %v", im4pFile, err)
 				}
 				m.Close()
+			} else {
+				log.Debugf("failed to parse %s data as macho: %v", im4pFile, err)
 			}
 		}
 	}
@@ -356,9 +387,9 @@ func ForEachPlistInIPSW(ipswPath, directory, pemDB string, handler func(string, 
 	}
 
 	if fsOS, err := i.GetFileSystemOsDmg(); err == nil {
-		log.Info("Scanning filesystem")
+		log.Info("Scanning FileSystem")
 		if err := scanDmg(ipswPath, fsOS, "filesystem", pemDB, scanPlist); err != nil {
-			return fmt.Errorf("failed to scan files in filesystem %s: %w", fsOS, err)
+			return fmt.Errorf("failed to scan files in FileSystem %s: %w", fsOS, err)
 		}
 	}
 	if systemOS, err := i.GetSystemOsDmg(); err == nil {
@@ -376,6 +407,79 @@ func ForEachPlistInIPSW(ipswPath, directory, pemDB string, handler func(string, 
 	if excOS, err := i.GetExclaveOSDmg(); err == nil {
 		log.Info("Scanning ExclaveOS")
 		if err := scanDmg(ipswPath, excOS, "ExclaveOS", pemDB, scanPlist); err != nil {
+			return fmt.Errorf("failed to scan files in ExclaveOS %s: %w", excOS, err)
+		}
+	}
+
+	return nil
+}
+
+func ForEachFileInIPSW(ipswPath, directory, pemDB string, handler func(string, string) error) error {
+	i, err := info.Parse(ipswPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse IPSW: %v", err)
+	}
+
+	var dmg string
+	scanFile := func(mountPoint, filePath string) error {
+		// filter to only scan a specific directory (if provided)
+		if directory != "" && !strings.Contains(filePath, directory) {
+			return nil
+		}
+		if _, rest, ok := strings.Cut(filePath, mountPoint); ok {
+			filePath = rest
+		}
+		if err := handler(dmg, filePath); err != nil {
+			return fmt.Errorf("failed to handle file %s: %w", filePath, err)
+		}
+		return nil
+	}
+
+	// scan the IPSW as a zip file
+	zr, err := zip.OpenReader(ipswPath)
+	if err != nil {
+		return fmt.Errorf("failed to open IPSW: %v", err)
+	}
+	defer zr.Close()
+	dmg = "IPSW"
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		// skip DMGs/cryptexes as they always have a different name (i.e. 090-43228-337.dmg.aea)
+		if regexp.MustCompile(`[0-9]{3}-[0-9]{5}-[0-9]{3}\.dmg(\.aea|\.trustcache)?(\.root_hash|\.trustcache|.integrity_catalog|\.mtree)?$`).MatchString(f.Name) {
+			continue
+		}
+		if err := scanFile("", f.Name); err != nil {
+			return fmt.Errorf("failed to scan file %s: %w", f.Name, err)
+		}
+	}
+	// scan the IPSW's DMGs/cryptexes
+	if fsOS, err := i.GetFileSystemOsDmg(); err == nil {
+		log.Info("Scanning FileSystem")
+		dmg = "filesystem"
+		if err := scanDmg(ipswPath, fsOS, dmg, pemDB, scanFile); err != nil {
+			return fmt.Errorf("failed to scan files in FileSystem %s: %w", fsOS, err)
+		}
+	}
+	if systemOS, err := i.GetSystemOsDmg(); err == nil {
+		log.Info("Scanning SystemOS")
+		dmg = "SystemOS"
+		if err := scanDmg(ipswPath, systemOS, dmg, pemDB, scanFile); err != nil {
+			return fmt.Errorf("failed to scan files in SystemOS %s: %w", systemOS, err)
+		}
+	}
+	if appOS, err := i.GetAppOsDmg(); err == nil {
+		log.Info("Scanning AppOS")
+		dmg = "AppOS"
+		if err := scanDmg(ipswPath, appOS, dmg, pemDB, scanFile); err != nil {
+			return fmt.Errorf("failed to scan files in AppOS %s: %w", appOS, err)
+		}
+	}
+	if excOS, err := i.GetExclaveOSDmg(); err == nil {
+		log.Info("Scanning ExclaveOS")
+		dmg = "ExclaveOS"
+		if err := scanDmg(ipswPath, excOS, dmg, pemDB, scanFile); err != nil {
 			return fmt.Errorf("failed to scan files in ExclaveOS %s: %w", excOS, err)
 		}
 	}

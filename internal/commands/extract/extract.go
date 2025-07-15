@@ -29,7 +29,6 @@ import (
 	"github.com/blacktop/ipsw/pkg/img4"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/blacktop/ipsw/pkg/kernelcache"
-	"github.com/blacktop/ipsw/pkg/lzfse"
 	"github.com/blacktop/ipsw/pkg/ota"
 	"github.com/blacktop/ipsw/pkg/plist"
 )
@@ -73,6 +72,8 @@ type Config struct {
 	Output string `json:"output,omitempty"`
 	// output as JSON
 	JSON bool `json:"json,omitempty"`
+	// show info
+	Info bool `json:"info,omitempty"`
 
 	info *info.Info
 }
@@ -231,106 +232,98 @@ func SPTM(c *Config) ([]string, error) {
 			return nil, fmt.Errorf("failed to open '%s': %v", f, err)
 		}
 
-		im4p, err := img4.ParseIm4p(bytes.NewReader(dat))
+		im4p, err := img4.ParsePayload(dat)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse '%s': %v", f, err)
 		}
 
 		folder := filepath.Join(filepath.Clean(c.Output), strings.TrimPrefix(filepath.Dir(f), tmpDIR))
-		fname := filepath.Join(folder, strings.TrimSuffix(filepath.Base(f), ".im4p"))
 		if err := os.MkdirAll(folder, 0o750); err != nil {
 			return nil, fmt.Errorf("failed to create output directory '%s': %v", folder, err)
 		}
+		fname := filepath.Join(folder, strings.TrimSuffix(filepath.Base(f), ".im4p"))
 
-		if bytes.Contains(im4p.Data[:4], []byte("bvx2")) {
-			dat, err = lzfse.NewDecoder(im4p.Data).DecodeBuffer()
-			if err != nil {
-				return nil, fmt.Errorf("failed to decompress '%s': %v", f, err)
-			}
-			if err = os.WriteFile(fname, dat, 0o666); err != nil {
-				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
-			}
-			outfiles = append(outfiles, fname)
-		} else {
-			if err = os.WriteFile(fname, im4p.Data, 0o666); err != nil {
-				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
-			}
-			outfiles = append(outfiles, fname)
+		data, err := im4p.GetData()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get data from '%s': %v", f, err)
 		}
+
+		if err = os.WriteFile(fname, data, 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
+		}
+
+		outfiles = append(outfiles, fname)
 	}
 
 	return outfiles, nil
 }
 
 func Exclave(c *Config) ([]string, error) {
-	var tmpOut []string
-	var outfiles []string
-
-	origOutput := c.Output
+	var (
+		err      error
+		tmpOut   []string
+		outfiles []string
+		excs     [][]byte
+	)
 
 	tmpDIR, err := os.MkdirTemp("", "ipsw_extract_exclave")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory to store Exlave im4p: %v", err)
 	}
 	defer os.RemoveAll(tmpDIR)
-	c.Output = tmpDIR
 
 	c.Pattern = `.*exclavecore_bundle.*im4p$`
-	out, err := Search(c)
+	out, err := Search(c, tmpDIR)
 	if err != nil {
 		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no Exclave bundles found")
 	}
-
 	tmpOut = append(tmpOut, out...)
-
-	c.Output = origOutput
 
 	for _, f := range tmpOut {
 		if strings.Contains(f, ".restore.") {
 			continue // TODO: skip restore bundles for now
 		}
-		dat, err := os.ReadFile(f)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open '%s': %v", f, err)
-		}
-
-		im4p, err := img4.ParseIm4p(bytes.NewReader(dat))
+		im4p, err := img4.OpenPayload(f)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse '%s': %v", f, err)
 		}
-
-		folder := filepath.Join(filepath.Clean(c.Output), strings.TrimPrefix(filepath.Dir(f), tmpDIR))
-		fname := filepath.Join(folder, strings.TrimSuffix(filepath.Base(f), ".im4p"))
-		if err := os.MkdirAll(folder, 0o750); err != nil {
-			return nil, fmt.Errorf("failed to create output directory '%s': %v", folder, err)
+		excData, err := im4p.GetData()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get data from '%s': %v", f, err)
 		}
-
-		if bytes.Contains(im4p.Data[:4], []byte("bvx2")) {
-			dat, err = lzfse.NewDecoder(im4p.Data).DecodeBuffer()
-			if err != nil {
-				return nil, fmt.Errorf("failed to decompress '%s': %v", f, err)
+		if !c.Info {
+			// save BUND file
+			baseName := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+			excFile := filepath.Join(filepath.Clean(c.Output), baseName)
+			if err := os.MkdirAll(filepath.Dir(excFile), 0o750); err != nil {
+				return nil, fmt.Errorf("failed to create output directory '%s': %v", excFile, err)
 			}
-			if err = os.WriteFile(fname, dat, 0o666); err != nil {
-				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
+			if err := os.WriteFile(excFile, excData, 0o644); err != nil {
+				return nil, fmt.Errorf("failed to write '%s': %v", excFile, err)
 			}
-			outfiles = append(outfiles, fname)
-		} else {
-			if err = os.WriteFile(fname, im4p.Data, 0o666); err != nil {
-				return nil, fmt.Errorf("failed to write '%s': %v", fname, err)
-			}
-			outfiles = append(outfiles, fname)
+			outfiles = append(outfiles, excFile)
 		}
+		// append to exclave cores for kernel/app extraction
+		excs = append(excs, excData)
 	}
 
-	for _, exc := range outfiles {
-		out, err := fwcmd.Extract(exc, filepath.Dir(exc))
+	for _, exc := range excs {
+		if c.Info {
+			fwcmd.ShowExclaveCores(exc)
+			continue
+		}
+		out, err := fwcmd.ExtractExclaveCores(exc, filepath.Clean(c.Output))
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract files from exclave bundle: %v", err)
 		}
 		outfiles = append(outfiles, out...)
+	}
+
+	if c.Info {
+		return nil, nil
 	}
 
 	return outfiles, nil
@@ -500,7 +493,12 @@ func Keybags(c *Config) (fname string, err error) {
 			return "", fmt.Errorf("failed to open IPSW: %v", err)
 		}
 		defer zr.Close()
-		kbags, err = img4.ParseZipKeyBags(zr.File, i, c.Pattern)
+		kbags, err = img4.GetKeybagsFromIPSW(zr.File, img4.KeybagMetaData{
+			Type:    i.Plists.Type,
+			Version: i.Plists.BuildManifest.ProductVersion,
+			Build:   i.Plists.BuildManifest.ProductBuildVersion,
+			Devices: i.Plists.Restore.SupportedProductTypes,
+		}, c.Pattern)
 		if err != nil {
 			return "", fmt.Errorf("failed to parse im4p kbags: %v", err)
 		}
@@ -513,7 +511,12 @@ func Keybags(c *Config) (fname string, err error) {
 		if err != nil {
 			return "", err
 		}
-		kbags, err = img4.ParseZipKeyBags(zr.File, i, c.Pattern)
+		kbags, err = img4.GetKeybagsFromIPSW(zr.File, img4.KeybagMetaData{
+			Type:    i.Plists.Type,
+			Version: i.Plists.BuildManifest.ProductVersion,
+			Build:   i.Plists.BuildManifest.ProductBuildVersion,
+			Devices: i.Plists.Restore.SupportedProductTypes,
+		}, c.Pattern)
 		if err != nil {
 			return "", fmt.Errorf("failed to parse im4p kbags: %v", err)
 		}
@@ -664,7 +667,7 @@ func FcsKeys(c *Config) ([]string, error) {
 }
 
 // Search searches for files matching a pattern in an IPSW
-func Search(c *Config) ([]string, error) {
+func Search(c *Config, tempDirectory ...string) ([]string, error) {
 	var artifacts []string
 
 	if len(c.Pattern) == 0 {
@@ -680,6 +683,14 @@ func Search(c *Config) ([]string, error) {
 			return nil, err
 		}
 		destPath := filepath.Join(filepath.Clean(c.Output), folder)
+		if c.Output == "" {
+			c.Output = folder
+		} else {
+			c.Output = filepath.Join(filepath.Clean(c.Output), folder)
+		}
+		if len(tempDirectory) > 0 {
+			destPath = tempDirectory[0]
+		}
 		zr, err := zip.OpenReader(c.IPSW)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open IPSW: %v", err)
@@ -731,6 +742,11 @@ func Search(c *Config) ([]string, error) {
 		_, zr, folder, err := getRemoteFolder(c)
 		if err != nil {
 			return nil, err
+		}
+		if c.Output == "" {
+			c.Output = folder
+		} else {
+			c.Output = filepath.Join(filepath.Clean(c.Output), folder)
 		}
 		artifacts, err = utils.SearchZip(zr.File, re, filepath.Join(filepath.Clean(c.Output), folder), c.Flatten, true)
 		if err != nil {

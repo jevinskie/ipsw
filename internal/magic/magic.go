@@ -14,8 +14,9 @@ import (
 	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 	"github.com/blacktop/go-apfs/pkg/disk/hfsplus"
 	"github.com/blacktop/ipsw/pkg/bundle"
+	"github.com/blacktop/ipsw/pkg/ftab"
 	"github.com/blacktop/ipsw/pkg/img3"
-	"github.com/blacktop/ipsw/pkg/img4"
+	"github.com/blacktop/lzss"
 )
 
 type Magic uint32
@@ -54,7 +55,7 @@ func IsMachOData(dat []byte) (bool, error) {
 	case Magic32, Magic64, MagicFatBE, MagicFatLE:
 		return true, nil
 	default:
-		return false, fmt.Errorf("not a macho file")
+		return false, nil
 	}
 }
 
@@ -75,14 +76,14 @@ func IsMachoOrImg4(filePath string) (bool, error) {
 		return true, nil
 	default:
 		f.Seek(0, io.SeekStart)
-		if _, err := img4.ParseIm4p(f); err == nil {
+		if isIm4p, err := IsIm4p(filePath); isIm4p && err == nil {
 			if strings.Contains(filePath, "kernelcache") {
 				return false, fmt.Errorf("im4p file detected (run `ipsw kernel dec`)")
 			}
 			return false, fmt.Errorf("im4p file detected (run `ipsw img4 extract`)")
 		}
 		f.Seek(0, io.SeekStart)
-		if _, err := img4.ParseImg4(f); err == nil {
+		if isImg4, err := IsImg4(filePath); isImg4 && err == nil {
 			if strings.Contains(filePath, "kernelcache") {
 				return false, fmt.Errorf("img4 file detected (run `ipsw kernel dec --km`)")
 			}
@@ -233,6 +234,22 @@ func IsDMG(filePath string) (bool, error) {
 	return true, nil
 }
 
+func IsEncryptedDMG(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+	magic := make([]byte, 8)
+	if _, err := f.Read(magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	if string(magic) == dmg.EncryptedMagic {
+		return true, nil
+	}
+	return false, nil
+}
+
 func IsAPFS(filePath string) (bool, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -318,6 +335,25 @@ func IsPBZXData(r io.Reader) (bool, error) {
 	}
 }
 
+func IsFTAB(filename string) (bool, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file %s: %w", filename, err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(32, io.SeekStart); err != nil {
+		return false, fmt.Errorf("failed to seek to FTAB magic: %w", err)
+	}
+	var magic uint64
+	if err := binary.Read(f, binary.LittleEndian, &magic); err != nil {
+		return false, fmt.Errorf("failed to read magic: %w", err)
+	}
+	if magic == ftab.FtabMagic {
+		return true, nil
+	}
+	return false, nil
+}
+
 func IsAA(filePath string) (bool, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -328,7 +364,7 @@ func IsAA(filePath string) (bool, error) {
 	if _, err := f.Read(magic); err != nil {
 		return false, fmt.Errorf("failed to read magic: %w", err)
 	}
-	switch Magic(binary.BigEndian.Uint32(magic[:])) {
+	switch Magic(binary.LittleEndian.Uint32(magic[:])) {
 	case MagicYAA1, MagicAA01:
 		return true, nil
 	default:
@@ -365,4 +401,25 @@ func IsAEAData(rc io.Reader) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func IsLZSS(data []byte) (bool, error) {
+	if len(data) > 8 && string(data[:8]) == lzss.Magic {
+		if len(data) < binary.Size(lzss.Header{}) {
+			return true, fmt.Errorf("data too short to contain valid LZSS header")
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func IsLZFSE(data []byte) (bool, error) {
+	if len(data) > 4 &&
+		(string(data[:4]) == "bvx2" ||
+			string(data[:4]) == "bvxn" ||
+			string(data[:4]) == "bvx1" ||
+			string(data[:4]) == "bvx-") {
+		return true, nil
+	}
+	return false, nil
 }

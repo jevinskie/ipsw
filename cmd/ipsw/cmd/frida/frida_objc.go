@@ -137,7 +137,7 @@ var fridaObjcCmd = &cobra.Command{
 				}
 				if err := survey.AskOne(prompt, &selected); err == terminal.InterruptErr {
 					log.Warn("Exiting...")
-					os.Exit(0)
+					return nil
 				}
 				dev, err = frida.DeviceByID(devices[selected].ID())
 				if err != nil {
@@ -273,7 +273,7 @@ var fridaObjcCmd = &cobra.Command{
 				}
 			})
 
-			if err := compiler.Watch(watch); err != nil {
+			if err := compiler.Watch(watch, nil); err != nil {
 				return fmt.Errorf("error watching file: %v", err)
 			}
 			log.Infof("Watching %s for changes", watch)

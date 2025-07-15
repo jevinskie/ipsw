@@ -15,26 +15,27 @@ Apple seems to be removing old `ipsws` from their CDN servers so if you get a 40
 Download an IPSW and extract/decompress the kernelcache
 
 ```bash
-❯ ipsw download ipsw --device iPhone11,2 --build 16A366
+❯ ipsw download ipsw --device iPhone16,1 --latest
 
-   • Getting IPSW              build=16A366 device=iPhone11,2 signed=true version=12.0
-      3.4 GiB / 3.4 GiB [==========================================================| 00:00 ] 79.08 MiB/s
+   • Latest iOS release found is: "18.2"
+   • Getting IPSW              build=22C152 device=iPhone16,1 signed=true version=18.2
+      7.2 GiB / 7.2 GiB [==========================================================| 00:00 ] 85.32 MiB/s
       • verifying sha1sum...
 
-❯ ipsw extract --kernel iPhone11,2_12.0_16A366_Restore.ipsw
+❯ ipsw extract --kernel iPhone16,1_18.2_22C152_Restore.ipsw
 
    • Extracting kernelcaches
-      • Created 16A366__iPhone11,2/kernelcache.release.iPhone11,2
+      • Created 22C152__iPhone16,1/kernelcache.release.iPhone16,1
 ```
 
 :::info note
-The kernelcache was extracted from the IPSW and decompressed
+The kernelcache was extracted from the IPSW and decompressed. Modern kernelcaches use LZFSE compression.
 :::
 
 ```bash
-❯ file 16A366__iPhone11,2/kernelcache.release.iPhone11,2
+❯ file 22C152__iPhone16,1/kernelcache.release.iPhone16,1
 
-16A366__iPhone11,2/kernelcache.release.iPhone11,2 "Mach-O 64-bit executable arm64"
+22C152__iPhone16,1/kernelcache.release.iPhone16,1 "Mach-O 64-bit executable arm64"
 ```
 
 Download ALL the **iOS** `12.0` IPSWs
@@ -64,13 +65,13 @@ Download the **macOS** `11.5` IPSW
 Debug speed issues
 
 ```bash
-❯ ipsw download ipsw --version 15.1 --device iPhone10,1 --verbose
+❯ ipsw download ipsw --device iPhone16,1 --latest --verbose
    • URLs to Download:
-      • https://updates.cdn-apple.com/2021FallFCS/fullrestores/071-64002/C820E7E5-0168-462E-923A-5C86E217D5B5/iPhone_4.7_P3_15.1_19B74_Restore.ipsw
-   • Getting IPSW              build=19B74 device=iPhone10,1 signed=true version=15.1
-      • Downloading               file=iPhone_4.7_P3_15.1_19B74_Restore.ipsw
+      • https://updates.cdn-apple.com/2024FallFCS/fullrestores/094-12345/A1B2C3D4-1234-4567-89AB-CDEF01234567/iPhone16,1_18.2_22C152_Restore.ipsw
+   • Getting IPSW              build=22C152 device=iPhone16,1 signed=true version=18.2
+      • Downloading               file=iPhone16,1_18.2_22C152_Restore.ipsw
       • URL resolved to: 17.253.17.207 "(Apple Inc - Santa Clara, CA. United States)"
-	5.3 MiB / 5.3 GiB [----------------------------------------------------------| 1h18m2s ]  1.17 MiB/s
+	12.3 MiB / 7.2 GiB [----------------------------------------------------------| 1h23m45s ]  1.47 MiB/s
 ```
 
 :::info note
@@ -79,16 +80,16 @@ The Apple CDN's IP has been geo-looked up and is in **Santa Clara**. You can Ctr
 
 Download with a Proxy
 
-> This will download and decompress the kernelcache for an **iPhone XS** running **iOS 12.1** behind a corporate proxy
+> This will download firmware for an **iPhone 15 Pro** behind a corporate proxy
 
 ```bash
-❯ ipsw download ipsw --proxy http://proxy.org:[PORT] --device iPhone11,2 --build 16B92
+❯ ipsw download ipsw --proxy http://proxy.org:[PORT] --device iPhone16,1 --latest
 ```
 
 To disable SSL cert verification
 
 ```bash
-❯ ipsw download ipsw --insecure --device iPhone11,2 --build 16B92
+❯ ipsw download ipsw --insecure --device iPhone16,1 --latest
 ```
 
 ### download `ipsw` config
@@ -104,18 +105,19 @@ download:
   latest: true
   confirm: true
   white-list:
-    - iPod9,1
-    - iPhone14,2
+    - iPhone16,1    # iPhone 15 Pro
+    - iPhone16,2    # iPhone 15 Pro Max
+    - iPad14,1      # iPad Pro 11-inch (M4)
   resume-all: true
   output: /SHARE/IPSWs
 ```
 
-> This will download the `latest` IPSWs for _only_ the `iPod9,1` and the `iPhone14,2` without requesting user confirmation to download. It will also always try to `resume` previously interrupted downloads and will download everything to the `/SHARE/IPSWs` folder
+> This will download the `latest` IPSWs for _only_ the iPhone 15 Pro models and iPad Pro M4 without requesting user confirmation to download. It will also always try to `resume` previously interrupted downloads and will download everything to the `/SHARE/IPSWs` folder
 
 You can also use environment variables to set `ipsw` config
 
 ```bash
-❯ IPSW_DOWNLOAD_DEVICE=iPhone14,2 ipsw download ipsw --latest
+❯ IPSW_DOWNLOAD_DEVICE=iPhone16,1 ipsw download ipsw --latest
 ```
 
 ### **download ipsw --latest**
@@ -239,6 +241,27 @@ Download iBridge firmwares
    • Getting IPSW              build=19P744 device=iBridge2,7 signed=true version=6.2
 	50.6 MiB / 577.2 MiB [====>-----------------------------------------------------| 7m20s ]  1.20 MiB/s
 ```
+
+## **download wp**
+
+Browse and download Apple wallpapers interactively through a terminal interface.
+
+```bash
+❯ ipsw download wp
+```
+
+This launches an interactive TUI (Terminal User Interface) that allows you to browse through Apple's collection of wallpapers with preview functionality.
+
+![Download WP Interface](/img/guides/download-wp.png)
+
+The interface displays:
+- A list of available wallpapers with resolution and size information
+- Live preview of selected wallpapers
+- Navigation controls: `↑/k` up, `↓/j` down, `p` preview, `enter` download, `q/esc` quit
+
+:::info note
+This command is currently available when you install `ipsw` via the brew tap.
+:::
 
 ## **download wiki**
 
@@ -598,26 +621,202 @@ Watch for 🆕 Releases
 
 This will ping the RSS feed every 5 minutes and create a desktop notification if anything NEW shows up.
 
-## **download tss**
+## **download appledb**
 
-Download SHSH blobs from Apple
+> Download IPSWs from [appledb](https://github.com/api4all/appledb)
 
+Download iOS 16.5 beta 4 kernelcache from appledb
+
+```bash
+❯ ipsw download appledb --os iOS --version '16.5 beta 4' --device iPhone15,2 --kernel
 ```
-❯ ipsw download tss
+
+Download latest release iOS IPSWs for multiple devices
+
+```bash
+❯ ipsw download appledb --os iOS --latest --release
 ```
 
-:::caution  note
-This is still a WIP _(however `signed` check does work)_
+Get URLs only for beta macOS IPSWs as JSON
+
+```bash
+❯ ipsw download appledb --os macOS --beta --urls --json
+```
+
+:::info note
+The `--os` flag is required and supports: audioOS, bridgeOS, iOS, iPadOS, iPodOS, macOS, tvOS, watchOS, visionOS
 :::
 
-Check the signing status of an **iOS** version
+## **download kdk**
 
-```
-❯ ipsw download tss --signed 15.0.2
-   ⨯ 🔥 15.0.2 is NO LONGER being signed
+Download Kernel Debug Kits
+
+```bash
+❯ ipsw download kdk --latest
 ```
 
+Download specific KDK version
+
+```bash
+❯ ipsw download kdk --version 13.5
 ```
-❯ ipsw download tss --signed 15.1
-   • ✅ 15.1 is still being signed
+
+Download and automatically install KDK
+
+```bash
+❯ ipsw download kdk --latest --install
+```
+
+## **download keys**
+
+Download firmware encryption keys from The iPhone Wiki
+
+```bash
+❯ ipsw download keys --device iPhone15,2 --build 20F66
+```
+
+Download all available keys for a device
+
+```bash
+❯ ipsw download keys --device iPhone15,2
+```
+
+## **download pcc**
+
+Download Private Cloud Compute VM files
+
+```bash
+❯ ipsw download pcc
+```
+
+Get info about a PCC release
+
+```bash
+❯ ipsw download pcc --info
+   • Found 1 PCC Releases
+```
+```bash
+ ╭╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴
+20872) b90e8f8813347a55cb9988aa264c73120099c179ce9992b9cc972836c2893c9a
+Type:   RELEASE
+Schema: V1
+Assets
+    [OS]
+        Variant: Darwin Cloud Customer Erase Install (IPSW)
+        Digest:  ceb5e5bde2427bf7a227b61ff307f79c4b9c701f46023262abd763758aea6453 (SHA256)
+        URL:     https://updates.cdn-apple.com/private-cloud-compute/ceb5e5bde2427bf7a227b61ff307f79c4b9c701f46023262abd763758aea6453
+    [PCS]
+        Variant: PrivateCloud Support
+        Digest:  2e61d8951957d10c8ce906b99d13853f9ab9828d6f8f8a4b5f160d2e1adc5ca8 (SHA256)
+        URL:     https://updates.cdn-apple.com/private-cloud-compute/2e61d8951957d10c8ce906b99d13853f9ab9828d6f8f8a4b5f160d2e1adc5ca8
+    [MODEL]
+        Variant: FM_LANGUAGE_SECURITY_RESEARCH_V1
+        Digest:  49e2c3c6216a027f7df0c703313398e75a6ddf769e695d0f6296bc2f4d0185e2 (SHA256)
+        URL:     https://updates.cdn-apple.com/private-cloud-compute/49e2c3c6216a027f7df0c703313398e75a6ddf769e695d0f6296bc2f4d0185e2
+    [HOST_TOOLS]
+        Variant: PrivateCloud Tools
+        Digest:  2813d1f93cfc196977d32718cfbc0e9727087f037d739ee683aaabab7598e316 (SHA256)
+        URL:     https://updates.cdn-apple.com/private-cloud-compute/2813d1f93cfc196977d32718cfbc0e9727087f037d739ee683aaabab7598e316
+    [DEBUG_SHELL]
+        Variant: Debug Shell for Private Cloud Security Research VM
+        Digest:  9f96a0fccb86d6fc024c1b69862c3d668dfa1e1b42e08ef49a4ac3a7e71174d3 (SHA256)
+        URL:     https://updates.cdn-apple.com/private-cloud-compute/9f96a0fccb86d6fc024c1b69862c3d668dfa1e1b42e08ef49a4ac3a7e71174d3
+Tickets
+    OS: ef571c0f38c4493008d43de4b298adcfb9db849e9d317f1bfd7c26d2dc289e70
+        [created: 2025-06-17 22:28:45]
+        [expires: 2025-07-23 09:00:16]
+    Cryptexes
+        0) ba5122b56ac7ed2873659cd5590550f18c1c7531bed7274ed748c214ac8cd9c0
+        1) d72a35e7891682dea9173aec66130212811db6d9f60cc5a690c1c648a229037f
+        2) b1a9a1a02885ca527231e0b63ed4287557a9665e1f89811a32d48c3ed367d753
+        3) efb993084b3f88666e6fab51ea5ee1ae6fe97d88cec889a278c0587944a438c4
+        4) c2e9614a3ef92bcb075e6b4139ccb725940e2c72e25fc0e34971ba7dacb1aa9b
+DarwinInit:
+{
+  "apply-timeout": "60min",
+  "config-security-policy": "customer",
+  "config-security-policy-version": 8,
+  "cryptex": [
+    {
+      "cacheable": true,
+      "url": "/",
+      "variant": "ASSET_TYPE_MODEL"
+    },
+    {
+      "cacheable": true,
+      "url": "/",
+      "variant": "ASSET_TYPE_PCS"
+    }
+  ],
+<SNIP>
+```
+
+## **download tss**
+
+Check IPSW signing status
+
+```bash
+❱ ipsw dl tss --version 17.5.1 --signed --device iPhone15,2
+   ⨯ 💀 No longer being signed  build=21F90 device=iPhone15,2 version=17.5.1
+```
+
+```bash
+❱ ipsw dl tss --version 18.5 --signed --device iPhone17,1
+   • ✅ Is still being signed   build=22F76 device=iPhone17,1 version=18.5
+```
+
+```bash
+❱ ipsw dl tss --version 26.0 --beta --signed --device iPhone17,1
+   • ✅ Is still being signed   beta=true build=23A5260n device=iPhone17,1 version=26.0
+```
+
+Download SHSH blob
+
+```bash
+ipipsw dl tss --version 26.0 --beta --device iPhone17,1 --output SHSH.26.0.blob
+   • SHSH blob saved           output=SHSH.26.0.blob
+```
+
+Examine
+
+```bash
+❱ ipsw img4 im4m extract SHSH.26.0.blob
+   • Extracting IM4M           path=SHSH.26.0.blob.im4m size=12 kB
+```
+
+```bash
+❱ ipsw img4 im4m info SHSH.26.0.blob.im4m
+IM4M (Manifest):
+  Tag:        IM4M
+  Version:    0
+  Body Size:  9831 bytes
+  Raw Size:   12196 bytes
+  Properties: 22
+    Device Properties:
+      CHIP (ApChipID): 33088
+      BORD (ApBoardID): 12
+      ECID (ExclusiveChipID): 1234567890
+      SDOM (ApSecurityDomain): 1
+      CEPO (CertificateEpoch): 1
+    Security Properties:
+      CPRO (CertificateProductionStatus): true
+      CSEC (CertificateSecurityMode): true
+      srvn (SecurityRevisionNumber): 5eb61ffea80974636ceb9eda6b93fdf46d7e8a58
+      snon (SecurityNonce): 1deac0d8449ec99f69b5fe44104fdb2f65a8c386
+      BNCH (BootNonceHash): d0a5b110379645182bdfdedd7b168213bdc2bbf44d9ce6aa7147f0a5b069d4d5
+    Version Properties:
+      love (ApOSLongVersion): 23.1.260.5.14,0
+      prtp (ApProductType): iPhone17,1
+      sdkp (ApSDKPlatform): iphoneos
+    Other Properties:
+      apmv (ProductMarketingVersion): 26.0
+      eply: 7801018081
+      esdm: 0
+      nrde: 0
+      pcrp: 0440465e12b073bab7885be45281833fa8f676ba71482c6c482383683408a86c1de77c19274c48248bf44537f64d2efefeee0ace1ac03736f5f6bf93433c2a149329869de6237c98e29ba420573f9164bb0cb400c7f7ed5815d7eaf9788a0df012
+      pndp: 1
+      tagt (ApTarget): D93AP
+      tatp (ApTargetType): d93
+      uidm: false
+<SNIP>
 ```

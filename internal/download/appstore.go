@@ -32,7 +32,8 @@ import (
 
 const (
 	appStoreAuthURL     = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
-	appStoreDownloadURL = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
+	appStoreDownloadURL = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct?guid="
+	// appStoreDownloadURL = "https://downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download?guid="
 	appStorePurchaseURL = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct"
 	appStoreSearchURL   = "https://itunes.apple.com/search"
 	appStoreLookupURL   = "https://itunes.apple.com/lookup"
@@ -65,6 +66,7 @@ type AppStoreConfig struct {
 	StoreFront    string
 	VaultPassword string
 	ConfigDir     string
+	KeybagPlist   string
 }
 
 type AppStore struct {
@@ -121,8 +123,8 @@ type loginResponse struct {
 		Address struct {
 			FirstName string `json:"firstName,omitempty" plist:"firstName,omitempty"`
 			LastName  string `json:"lastName,omitempty" plist:"lastName,omitempty"`
-		} `json:"address,omitempty" plist:"address,omitempty"`
-	} `json:"accountInfo,omitempty" plist:"accountInfo,omitempty"`
+		} `json:"address" plist:"address,omitempty"`
+	} `json:"accountInfo" plist:"accountInfo,omitempty"`
 	AltDSID             string `json:"altDsid,omitempty" plist:"altDsid,omitempty"`
 	PasswordToken       string `json:"passwordToken,omitempty" plist:"passwordToken,omitempty"`
 	ClearToken          string `json:"clearToken,omitempty" plist:"clearToken,omitempty"`
@@ -144,17 +146,17 @@ type loginResponse struct {
 		Account struct {
 			IsMinor         bool `json:"isMinor,omitempty" plist:"isMinor,omitempty"`
 			SuspectUnderage bool `json:"suspectUnderage,omitempty" plist:"suspectUnderage,omitempty"`
-		} `json:"account,omitempty" plist:"account,omitempty"`
+		} `json:"account" plist:"account,omitempty"`
 		Family struct {
 			HasFamily bool `json:"hasFamily,omitempty" plist:"hasFamily,omitempty"`
-		} `json:"family,omitempty" plist:"family,omitempty"`
-	} `json:"subscriptionStatus,omitempty" plist:"subscriptionStatus,omitempty"`
+		} `json:"family" plist:"family,omitempty"`
+	} `json:"subscriptionStatus" plist:"subscriptionStatus,omitempty"`
 	AccountFlags      map[string]any `json:"accountFlags,omitempty" plist:"accountFlags,omitempty"`
 	Status            int            `json:"status,omitempty" plist:"status,omitempty"`
 	DownloadQueueInfo struct {
 		DsID                  int  `json:"dsid,omitempty" plist:"dsid,omitempty"`
 		IsAutoDownloadMachine bool `json:"is-auto-download-machine,omitempty" plist:"is-auto-download-machine,omitempty"`
-	} `json:"download-queue-info,omitempty" plist:"download-queue-info,omitempty"`
+	} `json:"download-queue-info" plist:"download-queue-info,omitempty"`
 	PrivacyAcknowledgement map[string]int `json:"privacyAcknowledgement,omitempty" plist:"privacyAcknowledgement,omitempty"`
 }
 
@@ -181,12 +183,20 @@ type purchaseResponse struct {
 }
 
 type downloadRequest struct {
-	GUID              string `plist:"guid,omitempty"`
-	Price             string `plist:"price,omitempty"`
-	PricingParameters string `plist:"pricingParameters,omitempty"`
-	ProductType       string `plist:"productType,omitempty"`
-	SalableAdamId     string `plist:"salableAdamId,omitempty"`
+	CreditDisplay string `plist:"creditDisplay,omitempty"`
+	GUID          string `plist:"guid,omitempty"`
+	KBSync        string `plist:"kbsync,omitempty"`
+	SalableAdamId int    `plist:"salableAdamId,omitempty"`
+	SerialNumber  string `plist:"serialNumber,omitempty"`
 }
+
+// type downloadRequest struct {
+// 	GUID              string `plist:"guid,omitempty"`
+// 	Price             string `plist:"price,omitempty"`
+// 	PricingParameters string `plist:"pricingParameters,omitempty"`
+// 	ProductType       string `plist:"productType,omitempty"`
+// 	SalableAdamId     string `plist:"salableAdamId,omitempty"`
+// }
 
 type downloadResponse struct {
 	FailureType     string              `plist:"failureType,omitempty"`
@@ -740,18 +750,17 @@ func (as *AppStore) Download(bundleID, output string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get mac address: %v", err)
 	}
-
 	guid := strings.ReplaceAll(strings.ToUpper(mac), ":", "")
 
-	plist.NewEncoderForFormat(buf, plist.XMLFormat).Encode(&downloadRequest{
-		GUID:              guid,
-		Price:             "0",
-		PricingParameters: "STDRDL",
-		ProductType:       "C",
-		SalableAdamId:     strconv.Itoa(app.ID),
-	})
+	if err := plist.NewEncoderForFormat(buf, plist.XMLFormat).Encode(&downloadRequest{
+		CreditDisplay: "",
+		GUID:          guid,
+		SalableAdamId: app.ID,
+	}); err != nil {
+		return fmt.Errorf("failed to encode download request: %v", err)
+	}
 
-	req, err := http.NewRequest("POST", appStoreDownloadURL, buf)
+	req, err := http.NewRequest("POST", appStoreDownloadURL+guid, buf)
 	if err != nil {
 		return fmt.Errorf("failed to create http POST request: %v", err)
 	}
@@ -803,6 +812,10 @@ func (as *AppStore) Download(bundleID, output string) error {
 			return fmt.Errorf("failed to purchase app: %v", err)
 		}
 		return as.Download(bundleID, output)
+	}
+
+	if dl.FailureType == FailureTypeUnknownError {
+		return errors.New(dl.CustomerMessage)
 	}
 
 	if len(dl.Apps) == 0 {

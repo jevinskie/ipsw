@@ -44,7 +44,7 @@ jobs:
   build:
     strategy:
       matrix:
-        platform: [ubuntu-latest, macos-13, windows-latest]
+        platform: [ubuntu-latest, macos-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -130,6 +130,7 @@ jobs:
           cd build
           cmake ..
           sudo make install
+          sudo apt-get install -yq libheif1 libheif-plugin-libde265 heif-gdk-pixbuf libheif-dev # for wallpaper downloader
       - name: Build Dependencies (macOS)
         if: matrix.platform == 'macos-13'
         run: |

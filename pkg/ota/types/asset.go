@@ -19,7 +19,7 @@ type bridgeVersionInfo struct {
 	SEPEpoch                  struct {
 		Major int `json:"Major,omitempty"`
 		Minor int `json:"Minor,omitempty"`
-	} `json:"SEPEpoch,omitempty"`
+	} `json:"SEPEpoch"`
 }
 
 type restoreVersionInfo struct {
@@ -44,8 +44,9 @@ type Asset struct {
 	ActualMinimumSystemPartition          int                `json:"ActualMinimumSystemPartition" plist:"ActualMinimumSystemPartition,omitempty"`
 	AutoUpdate                            bool               `json:"AutoUpdate" plist:"AutoUpdate,omitempty"`
 	AssetType                             string             `json:"AssetType" plist:"AssetType,omitempty"`
-	BridgeVersionInfo                     bridgeVersionInfo  `json:"BridgeVersionInfo,omitempty" plist:"BridgeVersionInfo,omitempty"`
+	BridgeVersionInfo                     bridgeVersionInfo  `json:"BridgeVersionInfo" plist:"BridgeVersionInfo,omitempty"`
 	Build                                 string             `json:"Build" plist:"Build,omitempty"`
+	SimulatorVersion                      string             `json:"SimulatorVersion" plist:"SimulatorVersion,omitempty"`
 	DataTemplateSize                      int                `json:"DataTemplateSize" plist:"DataTemplateSize,omitempty"`
 	EAPFSEnabled                          bool               `json:"EAPFSEnabled,omitempty" plist:"EAPFSEnabled,omitempty"`
 	InstallationSize                      string             `json:"InstallationSize" plist:"InstallationSize,omitempty"`
@@ -55,7 +56,7 @@ type Asset struct {
 	PreflightBuildManifest                []byte             `json:"PreflightBuildManifest" plist:"PreflightBuildManifest,omitempty"`
 	PreflightGlobalSignatures             []byte             `json:"PreflightGlobalSignatures" plist:"PreflightGlobalSignatures,omitempty"`
 	RestoreVersion                        string             `json:"RestoreVersion,omitempty" plist:"RestoreVersion,omitempty"`
-	RestoreVersionInfo                    restoreVersionInfo `json:"RestoreVersionInfo,omitempty" plist:"RestoreVersionInfo,omitempty"`
+	RestoreVersionInfo                    restoreVersionInfo `json:"RestoreVersionInfo" plist:"RestoreVersionInfo,omitempty"`
 	PrerequisiteBuild                     string             `json:"PrerequisiteBuild" plist:"PrerequisiteBuild,omitempty"`
 	PrerequisiteOSVersion                 string             `json:"PrerequisiteOSVersion" plist:"PrerequisiteOSVersion,omitempty"`
 	ProductVersionExtra                   string             `json:"ProductVersionExtra" plist:"ProductVersionExtra,omitempty"`
@@ -83,6 +84,7 @@ type Asset struct {
 	IsZipStreamable                       bool               `json:"_IsZipStreamable" plist:"_IsZipStreamable,omitempty"`
 	MasteredVersion                       string             `json:"_MasteredVersion" plist:"_MasteredVersion,omitempty"`
 	Hash                                  []byte             `json:"_Measurement" plist:"_Measurement,omitempty"`
+	Sha256Hash                            []byte             `json:"_Measurement-SHA256" plist:"_Measurement-SHA256,omitempty"`
 	HashAlgorithm                         string             `json:"_MeasurementAlgorithm" plist:"_MeasurementAlgorithm,omitempty"`
 	UnarchivedSize                        int                `json:"_UnarchivedSize" plist:"_UnarchivedSize,omitempty"`
 	AssetDefaultGarbageCollectionBehavior string             `json:"__AssetDefaultGarbageCollectionBehavior" plist:"__AssetDefaultGarbageCollectionBehavior,omitempty"`

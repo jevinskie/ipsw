@@ -26,9 +26,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/apex/log"
+	"github.com/blacktop/ipsw/internal/ai"
+	dcmd "github.com/blacktop/ipsw/internal/commands/disass"
 	"github.com/blacktop/ipsw/pkg/disass"
 	"github.com/blacktop/ipsw/pkg/dyld"
 	"github.com/fatih/color"
@@ -45,7 +51,24 @@ func init() {
 	DisassCmd.Flags().String("symbol-image", "", "Dylib to search for symbol (speeds up symbol lookup)")
 	DisassCmd.Flags().Uint64P("vaddr", "a", 0, "Virtual address to start disassembling")
 	DisassCmd.Flags().Uint64P("count", "c", 0, "Number of instructions to disassemble")
+	DisassCmd.Flags().Bool("dylibs", false, "Analyze all dylibs loaded by the image as well (could improve accuracy)")
 	DisassCmd.Flags().BoolP("demangle", "d", false, "Demangle symbol names")
+	DisassCmd.Flags().BoolP("dec", "D", false, "Decompile assembly")
+	DisassCmd.Flags().String("dec-lang", "", "Language to decompile to (C, ObjC or Swift)")
+	DisassCmd.Flags().String("dec-llm", "copilot", "LLM provider to use for decompilation (ollama, copilot, etc.)")
+	DisassCmd.RegisterFlagCompletionFunc("dec-llm", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return ai.Providers, cobra.ShellCompDirectiveDefault
+	})
+	DisassCmd.Flags().String("dec-model", "", "LLM model to use for decompilation")
+	DisassCmd.Flags().Bool("dec-nocache", false, "Do not use decompilation cache")
+	DisassCmd.Flags().Float64("dec-temp", 0.2, "LLM temperature for decompilation")
+	DisassCmd.Flags().Float64("dec-top-p", 0.1, "LLM top_p for decompilation")
+	DisassCmd.Flags().Int("dec-retries", 0, "Number of retries for LLM decompilation")
+	DisassCmd.Flags().Duration("dec-retry-backoff", 30*time.Second, "Backoff time between retries (e.g. '30s', '2m')")
+	DisassCmd.Flags().String("dec-theme", "nord", "Decompilation color theme (nord, github, etc)")
+	DisassCmd.RegisterFlagCompletionFunc("dec-theme", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return styles.Names(), cobra.ShellCompDirectiveNoFileComp
+	})
 	DisassCmd.Flags().BoolP("json", "j", false, "Output as JSON")
 	DisassCmd.Flags().BoolP("quiet", "q", false, "Do NOT markup analysis (Faster)")
 	DisassCmd.Flags().Bool("force", false, "Continue to disassemble even if there are analysis errors")
@@ -58,7 +81,18 @@ func init() {
 	viper.BindPFlag("dyld.disass.symbol-image", DisassCmd.Flags().Lookup("symbol-image"))
 	viper.BindPFlag("dyld.disass.vaddr", DisassCmd.Flags().Lookup("vaddr"))
 	viper.BindPFlag("dyld.disass.count", DisassCmd.Flags().Lookup("count"))
+	viper.BindPFlag("dyld.disass.dylibs", DisassCmd.Flags().Lookup("dylibs"))
 	viper.BindPFlag("dyld.disass.demangle", DisassCmd.Flags().Lookup("demangle"))
+	viper.BindPFlag("dyld.disass.dec", DisassCmd.Flags().Lookup("dec"))
+	viper.BindPFlag("dyld.disass.dec-lang", DisassCmd.Flags().Lookup("dec-lang"))
+	viper.BindPFlag("dyld.disass.dec-llm", DisassCmd.Flags().Lookup("dec-llm"))
+	viper.BindPFlag("dyld.disass.dec-model", DisassCmd.Flags().Lookup("dec-model"))
+	viper.BindPFlag("dyld.disass.dec-nocache", DisassCmd.Flags().Lookup("dec-nocache"))
+	viper.BindPFlag("dyld.disass.dec-temp", DisassCmd.Flags().Lookup("dec-temp"))
+	viper.BindPFlag("dyld.disass.dec-top-p", DisassCmd.Flags().Lookup("dec-top-p"))
+	viper.BindPFlag("dyld.disass.dec-retries", DisassCmd.Flags().Lookup("dec-retries"))
+	viper.BindPFlag("dyld.disass.dec-retry-backoff", DisassCmd.Flags().Lookup("dec-retry-backoff"))
+	viper.BindPFlag("dyld.disass.dec-theme", DisassCmd.Flags().Lookup("dec-theme"))
 	viper.BindPFlag("dyld.disass.json", DisassCmd.Flags().Lookup("json"))
 	viper.BindPFlag("dyld.disass.quiet", DisassCmd.Flags().Lookup("quiet"))
 	viper.BindPFlag("dyld.disass.force", DisassCmd.Flags().Lookup("force"))
@@ -87,7 +121,11 @@ var DisassCmd = &cobra.Command{
 		# Disassemble a function at a virtual address in dyld_shared_cache and demangle symbol names
 		❯ ipsw dsc disass DSC --vaddr 0x1b19d6940 --demangle
 		# Disassemble a function at a virtual address in dyld_shared_cache and do NOT markup analysis (Faster)
-		❯ ipsw dsc disass DSC --vaddr 0x1b19d6940 --quiet`),
+		❯ ipsw dsc disass DSC --vaddr 0x1b19d6940 --quiet
+		# Decompile a function at a virtual address in dyld_shared_cache (via GitHub Copilot)
+		❯ ipsw dsc disass DSC --vaddr 0x1b19d6940 --dec --dec-model "Claude 3.7 Sonnet"
+		# Decompile a function using OpenRouter to access various models
+		❯ ipsw dsc disass DSC --vaddr 0x1b19d6940 --dec --dec-llm openrouter --dec-model "OpenAI: GPT-4o-mini"`),
 	Args: cobra.ExactArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return getDSCs(toComplete), cobra.ShellCompDirectiveDefault
@@ -112,6 +150,7 @@ var DisassCmd = &cobra.Command{
 		startAddr := viper.GetUint64("dyld.disass.vaddr")
 		instructions := viper.GetUint64("dyld.disass.count")
 
+		decompile := viper.GetBool("dyld.disass.dec")
 		demangleFlag := viper.GetBool("dyld.disass.demangle")
 		asJSON := viper.GetBool("dyld.disass.json")
 		quiet := viper.GetBool("dyld.disass.quiet")
@@ -121,6 +160,11 @@ var DisassCmd = &cobra.Command{
 		// validate flags
 		if len(symbolImageName) > 0 && len(symbolName) == 0 {
 			return fmt.Errorf("you must also supply a --symbol with --symbol-image flag")
+		}
+		if viper.IsSet("dyld.disass.dec-llm") {
+			if !slices.Contains(ai.Providers, viper.GetString("dyld.disass.dec-llm")) {
+				return fmt.Errorf("invalid LLM provider '%s', must be one of: %s", viper.GetString("dyld.disass.dec-llm"), strings.Join(ai.Providers, ", "))
+			}
 		}
 
 		dscPath := filepath.Clean(args[0])
@@ -154,7 +198,7 @@ var DisassCmd = &cobra.Command{
 			return nil
 		}
 
-		if !quiet && len(symbolName) > 0 {
+		if !quiet || len(symbolName) > 0 {
 			if len(cacheFile) == 0 {
 				cacheFile = dscPath + ".a2s"
 			}
@@ -199,7 +243,7 @@ var DisassCmd = &cobra.Command{
 						AsJSON:       asJSON,
 						Demangle:     demangleFlag,
 						Quite:        quiet,
-						Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+						Color:        viper.GetBool("color") && !viper.GetBool("no-color") && !decompile,
 					})
 
 					if !quiet {
@@ -214,10 +258,12 @@ var DisassCmd = &cobra.Command{
 						if err := engine.Triage(); err != nil {
 							return fmt.Errorf("first pass triage failed: %v", err)
 						}
-						for _, img := range engine.Dylibs() {
-							if err := img.Analyze(); err != nil {
-								if !viper.GetBool("dyld.disass.force") {
-									return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+						if viper.GetBool("dyld.disass.dylibs") {
+							for _, img := range engine.Dylibs() {
+								if err := img.Analyze(); err != nil {
+									if !viper.GetBool("dyld.disass.force") {
+										return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+									}
 								}
 							}
 						}
@@ -233,7 +279,30 @@ var DisassCmd = &cobra.Command{
 					//***************
 					//* DISASSEMBLE *
 					//***************
-					disass.Disassemble(engine)
+					asm := disass.Disassemble(engine)
+					if decompile && len(asm) > 0 {
+						decmp, err := dcmd.Decompile(asm, &dcmd.Config{
+							UUID:         f.UUID.String(),
+							LLM:          viper.GetString("dyld.disass.dec-llm"),
+							Language:     viper.GetString("dyld.disass.dec-lang"),
+							Model:        viper.GetString("dyld.disass.dec-model"),
+							Temperature:  viper.GetFloat64("dyld.disass.dec-temp"),
+							TopP:         viper.GetFloat64("dyld.disass.dec-top-p"),
+							Stream:       false,
+							DisableCache: viper.GetBool("dyld.disass.dec-nocache"),
+							Verbose:      viper.GetBool("verbose"),
+							Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+							Theme:        viper.GetString("dyld.disass.dec-theme"),
+							MaxRetries:   viper.GetInt("dyld.disass.dec-retries"),
+							RetryBackoff: viper.GetDuration("dyld.disass.dec-retry-backoff"),
+						})
+						if err != nil {
+							return fmt.Errorf("failed to decompile via llm: %v", err)
+						}
+						fmt.Println(decmp)
+					} else {
+						fmt.Println(asm)
+					}
 				}
 			}
 
@@ -289,7 +358,7 @@ var DisassCmd = &cobra.Command{
 						AsJSON:       asJSON,
 						Demangle:     demangleFlag,
 						Quite:        quiet,
-						Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+						Color:        viper.GetBool("color") && !viper.GetBool("no-color") && !decompile,
 					})
 
 					if !quiet {
@@ -308,10 +377,12 @@ var DisassCmd = &cobra.Command{
 						if err := engine.Triage(); err != nil {
 							return fmt.Errorf("first pass triage failed: %v", err)
 						}
-						for _, img := range engine.Dylibs() {
-							if err := img.Analyze(); err != nil {
-								if !viper.GetBool("dyld.disass.force") {
-									return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+						if viper.GetBool("dyld.disass.dylibs") {
+							for _, img := range engine.Dylibs() {
+								if err := img.Analyze(); err != nil {
+									if !viper.GetBool("dyld.disass.force") {
+										return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+									}
 								}
 							}
 						}
@@ -328,7 +399,30 @@ var DisassCmd = &cobra.Command{
 					//***************
 					//* DISASSEMBLE *
 					//***************
-					disass.Disassemble(engine)
+					asm := disass.Disassemble(engine)
+					if decompile && len(asm) > 0 {
+						decmp, err := dcmd.Decompile(asm, &dcmd.Config{
+							UUID:         f.UUID.String(),
+							LLM:          viper.GetString("dyld.disass.dec-llm"),
+							Language:     viper.GetString("dyld.disass.dec-lang"),
+							Model:        viper.GetString("dyld.disass.dec-model"),
+							Temperature:  viper.GetFloat64("dyld.disass.dec-temp"),
+							TopP:         viper.GetFloat64("dyld.disass.dec-top-p"),
+							Stream:       false,
+							DisableCache: viper.GetBool("dyld.disass.dec-nocache"),
+							Verbose:      viper.GetBool("verbose"),
+							Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+							Theme:        viper.GetString("dyld.disass.dec-theme"),
+							MaxRetries:   viper.GetInt("dyld.disass.dec-retries"),
+							RetryBackoff: viper.GetDuration("dyld.disass.dec-retry-backoff"),
+						})
+						if err != nil {
+							return fmt.Errorf("failed to decompile via llm: %v", err)
+						}
+						fmt.Println(decmp)
+					} else {
+						fmt.Println(asm)
+					}
 				}
 			} else { // SYMBOL or VAADDR
 				/*
@@ -348,7 +442,7 @@ var DisassCmd = &cobra.Command{
 						if !quiet {
 							if err := image.Analyze(); err != nil {
 								if !viper.GetBool("dyld.disass.force") {
-									return fmt.Errorf("failed to analyze image %s: %v", filepath.Base(image.Name), err)
+									return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(image.Name), err)
 								}
 							}
 						}
@@ -410,7 +504,7 @@ var DisassCmd = &cobra.Command{
 					AsJSON:       asJSON,
 					Demangle:     demangleFlag,
 					Quite:        quiet,
-					Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+					Color:        viper.GetBool("color") && !viper.GetBool("no-color") && !decompile,
 				})
 
 				if !quiet {
@@ -420,10 +514,12 @@ var DisassCmd = &cobra.Command{
 					if err := engine.Triage(); err != nil {
 						return fmt.Errorf("first pass triage failed: %v (use --force to continue anyway)", err)
 					}
-					for _, img := range engine.Dylibs() {
-						if err := img.Analyze(); err != nil {
-							if !viper.GetBool("dyld.disass.force") {
-								return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+					if viper.GetBool("dyld.disass.dylibs") {
+						for _, img := range engine.Dylibs() {
+							if err := img.Analyze(); err != nil {
+								if !viper.GetBool("dyld.disass.force") {
+									return fmt.Errorf("failed to analyze image %s: %v (use --force to continue anyway)", filepath.Base(img.Name), err)
+								}
 							}
 						}
 					}
@@ -440,7 +536,30 @@ var DisassCmd = &cobra.Command{
 				//***************
 				//* DISASSEMBLE *
 				//***************
-				disass.Disassemble(engine)
+				asm := disass.Disassemble(engine)
+				if decompile && len(asm) > 0 {
+					decmp, err := dcmd.Decompile(asm, &dcmd.Config{
+						UUID:         f.UUID.String(),
+						LLM:          viper.GetString("dyld.disass.dec-llm"),
+						Language:     viper.GetString("dyld.disass.dec-lang"),
+						Model:        viper.GetString("dyld.disass.dec-model"),
+						Temperature:  viper.GetFloat64("dyld.disass.dec-temp"),
+						TopP:         viper.GetFloat64("dyld.disass.dec-top-p"),
+						Stream:       false,
+						DisableCache: viper.GetBool("dyld.disass.dec-nocache"),
+						Verbose:      viper.GetBool("verbose"),
+						Color:        viper.GetBool("color") && !viper.GetBool("no-color"),
+						Theme:        viper.GetString("dyld.disass.dec-theme"),
+						MaxRetries:   viper.GetInt("dyld.disass.dec-retries"),
+						RetryBackoff: viper.GetDuration("dyld.disass.dec-retry-backoff"),
+					})
+					if err != nil {
+						return fmt.Errorf("failed to decompile via llm: %v", err)
+					}
+					fmt.Println(decmp)
+				} else {
+					fmt.Println(asm)
+				}
 			}
 		}
 

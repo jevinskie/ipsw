@@ -45,9 +45,10 @@ ipsw dyld [flags]
 * [ipsw dyld o2a](/docs/cli/ipsw/dyld/o2a)	 - Convert offset to address
 * [ipsw dyld objc](/docs/cli/ipsw/dyld/objc)	 - Dump Objective-C Optimization Info
 * [ipsw dyld patches](/docs/cli/ipsw/dyld/patches)	 - Dump dyld patch info
+* [ipsw dyld prewarm](/docs/cli/ipsw/dyld/prewarm)	 - Dump DSC prewarming data
 * [ipsw dyld search](/docs/cli/ipsw/dyld/search)	 - Find Dylib files for given search criteria
 * [ipsw dyld slide](/docs/cli/ipsw/dyld/slide)	 - Dump slide info
-* [ipsw dyld split](/docs/cli/ipsw/dyld/split)	 - Extracts all the dylibs using XCode's dsc_extractor
+* [ipsw dyld split](/docs/cli/ipsw/dyld/split)	 - Extracts all the dylibs using Xcode's dsc_extractor
 * [ipsw dyld str](/docs/cli/ipsw/dyld/str)	 - Search dyld_shared_cache for string
 * [ipsw dyld stubs](/docs/cli/ipsw/dyld/stubs)	 - Dump Stub Islands
 * [ipsw dyld swift](/docs/cli/ipsw/dyld/swift)	 - Dump Swift Optimizations Info

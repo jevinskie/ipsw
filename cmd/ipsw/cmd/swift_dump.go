@@ -27,7 +27,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
@@ -51,6 +50,7 @@ func init() {
 	swiftDumpCmd.Flags().BoolP("interface", "i", false, "🚧 Dump Swift Interface")
 	swiftDumpCmd.Flags().StringP("output", "o", "", "🚧 Folder to write interface to")
 	swiftDumpCmd.MarkFlagDirname("output")
+	swiftDumpCmd.Flags().Bool("headers", false, "Create separate header files for each Swift type/protocol/extension")
 	swiftDumpCmd.Flags().String("theme", "nord", "Color theme (nord, github, etc)")
 	swiftDumpCmd.RegisterFlagCompletionFunc("theme", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return styles.Names(), cobra.ShellCompDirectiveNoFileComp
@@ -68,6 +68,7 @@ func init() {
 	viper.BindPFlag("swift-dump.extra", swiftDumpCmd.Flags().Lookup("extra"))
 	viper.BindPFlag("swift-dump.interface", swiftDumpCmd.Flags().Lookup("interface"))
 	viper.BindPFlag("swift-dump.output", swiftDumpCmd.Flags().Lookup("output"))
+	viper.BindPFlag("swift-dump.headers", swiftDumpCmd.Flags().Lookup("headers"))
 	viper.BindPFlag("swift-dump.theme", swiftDumpCmd.Flags().Lookup("theme"))
 	viper.BindPFlag("swift-dump.type", swiftDumpCmd.Flags().Lookup("type"))
 	viper.BindPFlag("swift-dump.proto", swiftDumpCmd.Flags().Lookup("proto"))
@@ -107,8 +108,10 @@ var swiftDumpCmd = &cobra.Command{
 				viper.GetString("swift-dump.ext") != "") ||
 			viper.GetString("swift-dump.ass") != "" {
 			return fmt.Errorf("cannot dump --interface and use --type, --protocol, --ext or --ass flags")
-		} else if len(viper.GetString("swift-dump.output")) > 0 && !viper.GetBool("swift-dump.interface") {
-			return fmt.Errorf("cannot set --output without setting --interface")
+		} else if len(viper.GetString("swift-dump.output")) > 0 && !viper.GetBool("swift-dump.interface") && !viper.GetBool("swift-dump.headers") {
+			return fmt.Errorf("cannot set --output without setting --interface or --headers")
+		} else if viper.GetBool("swift-dump.headers") && len(viper.GetString("swift-dump.output")) == 0 {
+			return fmt.Errorf("cannot set --headers without setting --output")
 		}
 		doDump := false
 		if !viper.IsSet("swift-dump.interface") &&
@@ -127,6 +130,12 @@ var swiftDumpCmd = &cobra.Command{
 
 		doDemangle := viper.GetBool("swift-dump.demangle")
 
+		// Auto-enable demangle and interface when headers is specified
+		if viper.GetBool("swift-dump.headers") {
+			doDemangle = true
+			viper.Set("swift-dump.interface", true)
+		}
+
 		conf := mcmd.SwiftConfig{
 			Verbose: Verbose,
 			// Addrs:       viper.GetBool("swift-dump.re"),
@@ -138,50 +147,17 @@ var swiftDumpCmd = &cobra.Command{
 			Color:       viper.GetBool("color") && !viper.GetBool("no-color"),
 			Theme:       viper.GetString("swift-dump.theme"),
 			Output:      viper.GetString("swift-dump.output"),
+			Headers:     viper.GetBool("swift-dump.headers"),
 		}
 
 		if ok, _ := magic.IsMachO(args[0]); ok { /* MachO binary */
 			machoPath := filepath.Clean(args[0])
-			// first check for fat file
-			fat, err := macho.OpenFat(machoPath)
-			if err != nil && err != macho.ErrNotFat {
+			mr, err := mcmd.OpenMachO(machoPath, viper.GetString("swift-dump.arch"))
+			if err != nil {
 				return err
 			}
-			if err == macho.ErrNotFat {
-				m, err = macho.Open(machoPath)
-				if err != nil {
-					return err
-				}
-			} else {
-				var options []string
-				var shortOptions []string
-				for _, arch := range fat.Arches {
-					options = append(options, fmt.Sprintf("%s, %s", arch.CPU, arch.SubCPU.String(arch.CPU)))
-					shortOptions = append(shortOptions, strings.ToLower(arch.SubCPU.String(arch.CPU)))
-				}
-
-				if len(viper.GetString("swift-dump.arch")) > 0 {
-					found := false
-					for i, opt := range shortOptions {
-						if strings.Contains(strings.ToLower(opt), strings.ToLower(viper.GetString("swift-dump.arch"))) {
-							m = fat.Arches[i].File
-							found = true
-							break
-						}
-					}
-					if !found {
-						return fmt.Errorf("--arch '%s' not found in: %s", viper.GetString("swift-dump.arch"), strings.Join(shortOptions, ", "))
-					}
-				} else {
-					choice := 0
-					prompt := &survey.Select{
-						Message: "Detected a universal MachO file, please select an architecture to analyze:",
-						Options: options,
-					}
-					survey.AskOne(prompt, &choice)
-					m = fat.Arches[choice].File
-				}
-			}
+			defer mr.Close()
+			m = mr.File
 			if viper.GetBool("swift-dump.deps") {
 				log.Error("cannot dump imported private frameworks from a MachO file (only from a DSC)")
 			}
@@ -219,6 +195,10 @@ var swiftDumpCmd = &cobra.Command{
 				if err := s.DumpAssociatedType(viper.GetString("swift-dump.ass")); err != nil {
 					return fmt.Errorf("failed to dump associated type: %v", err)
 				}
+			}
+
+			if viper.GetBool("swift-dump.headers") {
+				return s.WriteHeaders()
 			}
 
 			if doDump {
@@ -306,6 +286,12 @@ var swiftDumpCmd = &cobra.Command{
 
 				if viper.GetString("swift-dump.ass") != "" {
 					if err := s.DumpAssociatedType(viper.GetString("swift-dump.ass")); err != nil {
+						return err
+					}
+				}
+
+				if viper.GetBool("swift-dump.headers") {
+					if err := s.WriteHeaders(); err != nil {
 						return err
 					}
 				}

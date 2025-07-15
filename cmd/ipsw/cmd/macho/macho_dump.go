@@ -30,10 +30,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/types"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -109,46 +109,12 @@ var machoDumpCmd = &cobra.Command{
 
 		var m *macho.File
 
-		// first check for fat file
-		fat, err := macho.OpenFat(machoPath)
-		if err != nil && err != macho.ErrNotFat {
+		mr, err := mcmd.OpenMachO(machoPath, selectedArch)
+		if err != nil {
 			return err
 		}
-		if err == macho.ErrNotFat {
-			m, err = macho.Open(machoPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			var options []string
-			var shortOptions []string
-			for _, arch := range fat.Arches {
-				options = append(options, fmt.Sprintf("%s, %s", arch.CPU, arch.SubCPU.String(arch.CPU)))
-				shortOptions = append(shortOptions, strings.ToLower(arch.SubCPU.String(arch.CPU)))
-			}
-
-			if len(selectedArch) > 0 {
-				found := false
-				for i, opt := range shortOptions {
-					if strings.Contains(strings.ToLower(opt), strings.ToLower(selectedArch)) {
-						m = fat.Arches[i].File
-						found = true
-						break
-					}
-				}
-				if !found {
-					return fmt.Errorf("--arch '%s' not found in: %s", selectedArch, strings.Join(shortOptions, ", "))
-				}
-			} else {
-				choice := 0
-				prompt := &survey.Select{
-					Message: "Detected a universal MachO file, please select an architecture to analyze:",
-					Options: options,
-				}
-				survey.AskOne(prompt, &choice)
-				m = fat.Arches[choice].File
-			}
-		}
+		defer mr.Close()
+		m = mr.File
 
 		if len(filesetEntry) > 0 && m.FileTOC.FileHeader.Type != types.MH_FILESET {
 			return fmt.Errorf("macho is not a MH_FILESET")

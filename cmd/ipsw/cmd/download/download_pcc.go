@@ -25,9 +25,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/fatih/color"
@@ -36,35 +38,51 @@ import (
 )
 
 func init() {
-	DownloadCmd.AddCommand(pccCmd)
-
-	pccCmd.Flags().BoolP("info", "i", false, "Show PCC Release info")
+	DownloadCmd.AddCommand(downloadPccCmd)
+	// Download behavior flags
+	downloadPccCmd.Flags().String("proxy", "", "HTTP/HTTPS proxy")
+	downloadPccCmd.Flags().Bool("insecure", false, "do not verify ssl certs")
+	downloadPccCmd.Flags().Bool("skip-all", false, "always skip resumable IPSWs")
+	downloadPccCmd.Flags().Bool("resume-all", false, "always resume resumable IPSWs")
+	downloadPccCmd.Flags().Bool("restart-all", false, "always restart resumable IPSWs")
+	// Command-specific flags
+	downloadPccCmd.Flags().BoolP("info", "i", false, "Show PCC Release info")
 	// TODO: write to '/var/root/Library/Application Support/com.apple.security-research.pccvre/instances/<NAME>' to create a PCC VM w/o needing to set the csrutil first
-	pccCmd.Flags().StringP("output", "o", "", "Output directory to save files to")
-	viper.BindPFlag("download.pcc.info", pccCmd.Flags().Lookup("info"))
-	viper.BindPFlag("download.pcc.output", pccCmd.Flags().Lookup("output"))
-
-	pccCmd.SetHelpFunc(func(c *cobra.Command, s []string) {
-		DownloadCmd.PersistentFlags().MarkHidden("white-list")
-		DownloadCmd.PersistentFlags().MarkHidden("black-list")
-		DownloadCmd.PersistentFlags().MarkHidden("device")
-		DownloadCmd.PersistentFlags().MarkHidden("model")
-		DownloadCmd.PersistentFlags().MarkHidden("version")
-		DownloadCmd.PersistentFlags().MarkHidden("build")
-		DownloadCmd.PersistentFlags().MarkHidden("confirm")
-		DownloadCmd.PersistentFlags().MarkHidden("remove-commas")
-		c.Parent().HelpFunc()(c, s)
-	})
-
-	pccCmd.MarkFlagDirname("output")
+	downloadPccCmd.Flags().StringP("output", "o", "", "Output directory to save files to")
+	downloadPccCmd.MarkFlagDirname("output")
+	// Bind persistent flags
+	viper.BindPFlag("download.pcc.proxy", downloadPccCmd.Flags().Lookup("proxy"))
+	viper.BindPFlag("download.pcc.insecure", downloadPccCmd.Flags().Lookup("insecure"))
+	viper.BindPFlag("download.pcc.skip-all", downloadPccCmd.Flags().Lookup("skip-all"))
+	viper.BindPFlag("download.pcc.resume-all", downloadPccCmd.Flags().Lookup("resume-all"))
+	viper.BindPFlag("download.pcc.restart-all", downloadPccCmd.Flags().Lookup("restart-all"))
+	// Bind command-specific flags
+	viper.BindPFlag("download.pcc.info", downloadPccCmd.Flags().Lookup("info"))
+	viper.BindPFlag("download.pcc.output", downloadPccCmd.Flags().Lookup("output"))
 }
 
-// pccCmd represents the pcc command
-var pccCmd = &cobra.Command{
-	Use:           "pcc",
-	Aliases:       []string{"p", "vre", "pccvre"},
-	Short:         "Download PCC VM files",
-	SilenceUsage:  false,
+// downloadPccCmd represents the pcc command
+var downloadPccCmd = &cobra.Command{
+	Use:     "pcc [INDEX]",
+	Aliases: []string{"p", "vre", "pccvre"},
+	Short:   "Download PCC VM files",
+	Args:    cobra.MaximumNArgs(1),
+	Example: heredoc.Doc(`
+		# Show available PCC releases info
+		❯ ipsw download pcc --info
+
+		# Show info for specific PCC release by index
+		❯ ipsw download pcc 42 --info
+
+		# Download specific PCC release by index
+		❯ ipsw download pcc 42
+
+		# Download PCC VM files interactively
+		❯ ipsw download pcc
+
+		# Download to specific directory
+		❯ ipsw download pcc --output ./pcc-vms
+	`),
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -73,18 +91,12 @@ var pccCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		viper.BindPFlag("download.proxy", cmd.Flags().Lookup("proxy"))
-		viper.BindPFlag("download.insecure", cmd.Flags().Lookup("insecure"))
-		viper.BindPFlag("download.skip-all", cmd.Flags().Lookup("skip-all"))
-		viper.BindPFlag("download.resume-all", cmd.Flags().Lookup("resume-all"))
-		viper.BindPFlag("download.restart-all", cmd.Flags().Lookup("restart-all"))
-
 		// settings
-		proxy := viper.GetString("download.proxy")
-		insecure := viper.GetBool("download.insecure")
-		// skipAll := viper.GetBool("download.skip-all")
-		// resumeAll := viper.GetBool("download.resume-all")
-		// restartAll := viper.GetBool("download.restart-all")
+		proxy := viper.GetString("download.pcc.proxy")
+		insecure := viper.GetBool("download.pcc.insecure")
+		// skipAll := viper.GetBool("download.pcc.skip-all")
+		// resumeAll := viper.GetBool("download.pcc.resume-all")
+		// restartAll := viper.GetBool("download.pcc.restart-all")
 
 		releases, err := download.GetPCCReleases(proxy, insecure)
 		if err != nil {
@@ -96,16 +108,42 @@ var pccCmd = &cobra.Command{
 			return fmt.Errorf("no PCC Releases found")
 		}
 
+		// Filter releases if user provided a specific index
+		if len(args) > 0 {
+			index, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid index: %s", args[0])
+			}
+
+			// Find release with matching index
+			foundIndex := -1
+			for i := range releases {
+				if releases[i].Index == uint64(index) {
+					foundIndex = i
+					break
+				}
+			}
+
+			if foundIndex == -1 {
+				return fmt.Errorf("no PCC release found with index %d", index)
+			}
+
+			// Replace releases list with filtered single release
+			releases = releases[foundIndex : foundIndex+1]
+		}
+
 		if viper.GetBool("download.pcc.info") {
 			log.Infof("Found %d PCC Releases", len(releases))
-			for _, release := range releases {
+			for i := range releases {
+				release := &releases[i]
 				fmt.Println(" ╭╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴")
 				fmt.Println(release)
 				fmt.Println(" ╰╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴")
 			}
 		} else {
 			var choices []string
-			for _, r := range releases {
+			for i := range releases {
+				r := &releases[i]
 				choices = append(choices, fmt.Sprintf("%04d: %s  [created: %s]",
 					r.Index,
 					hex.EncodeToString(r.GetReleaseHash()),

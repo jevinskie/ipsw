@@ -22,6 +22,8 @@ THE SOFTWARE.
 package img4
 
 import (
+	"github.com/apex/log"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -29,13 +31,17 @@ import (
 // Img4Cmd represents the img4 command
 var Img4Cmd = &cobra.Command{
 	Use:   "img4",
-	Short: "Parse Img4",
+	Short: "Parse and manipulate IMG4 files",
 	Args:  cobra.NoArgs,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		viper.BindPFlag("color", cmd.Flags().Lookup("color"))
 		viper.BindPFlag("no-color", cmd.Flags().Lookup("no-color"))
 		viper.BindPFlag("verbose", cmd.Flags().Lookup("verbose"))
 		viper.BindPFlag("diff-tool", cmd.Flags().Lookup("diff-tool"))
+		if viper.GetBool("verbose") {
+			log.SetLevel(log.DebugLevel)
+		}
+		color.NoColor = viper.GetBool("no-color")
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()

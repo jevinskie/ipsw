@@ -28,9 +28,9 @@ import (
 	"strings"
 
 	"github.com/apex/log"
-	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/types"
 	"github.com/blacktop/go-plist"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/fatih/color"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -39,7 +39,8 @@ import (
 
 func init() {
 	KernelcacheCmd.AddCommand(symbolsetsCmd)
-	kextsCmd.MarkZshCompPositionalArgumentFile(1, "kernelcache*")
+	symbolsetsCmd.Flags().StringP("arch", "a", "", "Which architecture to use for fat/universal MachO")
+	symbolsetsCmd.MarkZshCompPositionalArgumentFile(1, "kernelcache*")
 }
 
 type symbolsSets struct {
@@ -75,10 +76,14 @@ var symbolsetsCmd = &cobra.Command{
 			return fmt.Errorf("file %s does not exist", args[0])
 		}
 
-		m, err := macho.Open(args[0])
+		selectedArch, _ := cmd.Flags().GetString("arch")
+
+		mr, err := mcmd.OpenMachO(args[0], selectedArch)
 		if err != nil {
 			return errors.Wrapf(err, "%s appears to not be a valid MachO", args[0])
 		}
+		defer mr.Close()
+		m := mr.File
 
 		if m.FileTOC.FileHeader.Type == types.MH_FILESET {
 			m, err = m.GetFileSetFileByName("com.apple.kernel")

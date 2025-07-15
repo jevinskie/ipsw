@@ -37,6 +37,7 @@ const (
 	IsSimulator            formatVersion = 0x200
 	LocallyBuiltCache      formatVersion = 0x400
 	BuiltFromChainedFixups formatVersion = 0x800
+	NewFormatTLVs          formatVersion = 0x1000
 )
 
 type cacheType uint64
@@ -66,6 +67,9 @@ func (f formatVersion) IsLocallyBuiltCache() bool {
 func (f formatVersion) IsBuiltFromChainedFixups() bool {
 	return (f & BuiltFromChainedFixups) != 0
 }
+func (f formatVersion) IsNewFormatTLVs() bool {
+	return (f & NewFormatTLVs) != 0
+}
 
 func (f formatVersion) String() string {
 	var fStr []string
@@ -80,6 +84,9 @@ func (f formatVersion) String() string {
 	}
 	if f.IsBuiltFromChainedFixups() {
 		fStr = append(fStr, "BuiltFromChainedFixups")
+	}
+	if f.IsNewFormatTLVs() {
+		fStr = append(fStr, "NewFormatTLVs")
 	}
 	if len(fStr) > 0 {
 		return fmt.Sprintf("%d (%s)", f.Version(), strings.Join(fStr, "|"))
@@ -148,7 +155,8 @@ type CacheHeader struct {
 	   simulator              : 1,  // for simulator of specified platform
 	   locallyBuiltCache      : 1,  // 0 for B&I built cache, 1 for locally built cache
 	   builtFromChainedFixups : 1,  // some dylib in cache was built using chained fixups, so patch tables must be used for overrides
-	   padding                : 20; // TBD */
+	   newFormatTLVs          : 1,  // TLVs have been set by cache builder as new format (not needing runtime side table)
+	   padding                : 19; // TBD */
 	SharedRegionStart      uint64   // base load address of cache if not slid
 	SharedRegionSize       uint64   // overall size of region cache can be mapped into
 	MaxSlide               maxSlide // runtime slide of cache can be between zero and this value
@@ -193,6 +201,10 @@ type CacheHeader struct {
 	DynamicDataMaxSize            uint64         // maximum size of space reserved from dynamic data
 	TPROMappingsOffset            uint32         // file offset to first dyld_cache_tpro_mapping_info
 	TPROMappingsCount             uint32         // number of dyld_cache_tpro_mapping_info entries
+	FunctionVariantInfoAddr       uint64         // (unslid) address of dyld_cache_function_variant_info
+	FunctionVariantInfoSize       uint64         // Size of all of the variant information pointed to via the dyld_cache_function_variant_info
+	PrewarmingDataOffset          uint64         // file offset to dyld_prewarming_header
+	PrewarmingDataSize            uint64         // byte size of prewarming data
 }
 
 type CacheMappingInfo struct {
@@ -1220,6 +1232,114 @@ type subcacheEntry struct {
 type TPROMapping struct {
 	Addr uint64
 	Size uint64
+}
+
+const (
+	DyldCachePrewarmingDataPageSize = 0x4000 // 16k pages
+)
+
+type CacheFunctionVariantEntry struct {
+	FixupLocVmAddr               uint64 // location of pointer that needs to be re-bound (unslid)
+	FunctionVariantTableVmAddr   uint64 // location of FunctionVariants in LINKEDIT (unslid)
+	DylibHeaderVmAddr            uint64 // location of mach_header of dylib that implements this function variant
+	PackedData                   uint32 // contains variantIndex (12 bits), pacAuth (1 bit), pacAddress (1 bit), pacKey (2 bits), pacDiversity (16 bits)
+	TargetDylibIndex             uint16 // which dylib has the function variant
+	FunctionVariantTableSizeDiv4 uint16 // size of FunctionVariants in LINKEDIT (unslid) divided by 4
+}
+
+func (e *CacheFunctionVariantEntry) VariantIndex() uint32 {
+	return e.PackedData & 0xFFF // 12 bits
+}
+
+func (e *CacheFunctionVariantEntry) PacAuth() bool {
+	return (e.PackedData>>12)&0x1 != 0 // 1 bit
+}
+
+func (e *CacheFunctionVariantEntry) PacAddress() bool {
+	return (e.PackedData>>13)&0x1 != 0 // 1 bit
+}
+
+func (e *CacheFunctionVariantEntry) PacKey() uint32 {
+	return (e.PackedData >> 14) & 0x3 // 2 bits
+}
+
+func (e *CacheFunctionVariantEntry) PacDiversity() uint32 {
+	return (e.PackedData >> 16) & 0xFFFF // 16 bits
+}
+
+func (e *CacheFunctionVariantEntry) SetVariantIndex(index uint32) {
+	e.PackedData = (e.PackedData &^ 0xFFF) | (index & 0xFFF)
+}
+
+func (e *CacheFunctionVariantEntry) SetPacAuth(auth bool) {
+	if auth {
+		e.PackedData |= (1 << 12)
+	} else {
+		e.PackedData &^= (1 << 12)
+	}
+}
+
+func (e *CacheFunctionVariantEntry) SetPacAddress(address bool) {
+	if address {
+		e.PackedData |= (1 << 13)
+	} else {
+		e.PackedData &^= (1 << 13)
+	}
+}
+
+func (e *CacheFunctionVariantEntry) SetPacKey(key uint32) {
+	e.PackedData = (e.PackedData &^ (0x3 << 14)) | ((key & 0x3) << 14)
+}
+
+func (e *CacheFunctionVariantEntry) SetPacDiversity(diversity uint32) {
+	e.PackedData = (e.PackedData &^ (0xFFFF << 16)) | ((diversity & 0xFFFF) << 16)
+}
+
+func (e *CacheFunctionVariantEntry) String() string {
+	var pac string
+	if e.PacAuth() {
+		pac = fmt.Sprintf(" pac={addr=%t, key=%d, diversity=%#x}", e.PacAddress(), e.PacKey(), e.PacDiversity())
+	}
+	return fmt.Sprintf("%#x: %#x - %#x (dylib-hdr=%#x dylib-idx=%d%s)",
+		e.FixupLocVmAddr,
+		e.FunctionVariantTableVmAddr,
+		e.FunctionVariantTableVmAddr+uint64(e.FunctionVariantTableSizeDiv4*4),
+		e.DylibHeaderVmAddr,
+		e.TargetDylibIndex,
+		pac,
+	)
+}
+
+type CacheFunctionVariantInfo struct {
+	Version uint32                      // == 1 for now
+	Count   uint32                      // number of elements in entries array
+	Entries []CacheFunctionVariantEntry // variable length array
+}
+
+type PrewarmingEntry struct {
+	PackedData uint64 // contains cacheVMOffset (40 bits) and numPages (24 bits)
+}
+
+func (e *PrewarmingEntry) CacheVMOffset() uint64 {
+	return e.PackedData & 0xFFFFFFFFFF // 40 bits - up to 1TB caches
+}
+
+func (e *PrewarmingEntry) NumPages() uint32 {
+	return uint32((e.PackedData >> 40) & 0xFFFFFF) // 24 bits - assumes 16k pages
+}
+
+func (e *PrewarmingEntry) SetCacheVMOffset(offset uint64) {
+	e.PackedData = (e.PackedData &^ 0xFFFFFFFFFF) | (offset & 0xFFFFFFFFFF)
+}
+
+func (e *PrewarmingEntry) SetNumPages(pages uint32) {
+	e.PackedData = (e.PackedData &^ (0xFFFFFF << 40)) | ((uint64(pages) & 0xFFFFFF) << 40)
+}
+
+type PrewarmingHeader struct {
+	Version uint32            // version
+	Count   uint32            // count
+	Entries []PrewarmingEntry // variable length array
 }
 
 // This struct is a small piece of dynamic data that can be included in the shared region, and contains configuration

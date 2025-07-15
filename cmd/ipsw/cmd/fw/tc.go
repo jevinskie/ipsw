@@ -44,18 +44,21 @@ import (
 func init() {
 	FwCmd.AddCommand(tcCmd)
 
+	tcCmd.Flags().BoolP("remote", "r", false, "Parse remote IPSW URL")
 	tcCmd.Flags().BoolP("json", "j", false, "Output in JSON format")
 	tcCmd.Flags().StringP("output", "o", "", "Folder to extract files to")
 	tcCmd.MarkFlagDirname("output")
+	viper.BindPFlag("fw.tc.remote", tcCmd.Flags().Lookup("remote"))
 	viper.BindPFlag("fw.tc.json", tcCmd.Flags().Lookup("json"))
 	viper.BindPFlag("fw.tc.output", tcCmd.Flags().Lookup("output"))
 }
 
 // tcCmd represents the tc command
 var tcCmd = &cobra.Command{
-	Use:   "tc <IM4P|IPSW>",
-	Short: "Dump TrustCache",
-	Args:  cobra.ExactArgs(1),
+	Use:           "tc <IM4P|IPSW>",
+	Short:         "Dump TrustCache",
+	Args:          cobra.ExactArgs(1),
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
@@ -64,32 +67,44 @@ var tcCmd = &cobra.Command{
 
 		tcs := make(map[string]*fwcmd.TrustCache)
 
-		if isZip, err := magic.IsZip(filepath.Clean(args[0])); err != nil {
+		if isZip, err := magic.IsZip(filepath.Clean(args[0])); err != nil && !viper.GetBool("fw.tc.remote") {
 			return fmt.Errorf("failed to determine if file is a zip: %v", err)
-		} else if isZip {
-			out, err := extract.Search(&extract.Config{
-				IPSW:    filepath.Clean(args[0]),
-				Pattern: ".trustcache$",
-				Output:  os.TempDir(),
-			})
-			if err != nil {
-				return err
+		} else if isZip || viper.GetBool("fw.tc.remote") {
+			var out []string
+			if viper.GetBool("fw.tc.remote") {
+				out, err = extract.Search(&extract.Config{
+					URL:     args[0],
+					Pattern: ".trustcache$",
+					Output:  os.TempDir(),
+				})
+				if err != nil {
+					return err
+				}
+			} else {
+				out, err = extract.Search(&extract.Config{
+					IPSW:    filepath.Clean(args[0]),
+					Pattern: ".trustcache$",
+					Output:  os.TempDir(),
+				})
+				if err != nil {
+					return err
+				}
 			}
 			for _, f := range out {
 				if ok, _ := magic.IsImg4(f); ok {
 					log.WithField("file", f).Debug("Processing IMG4 file")
-					img4, err := img4.OpenImg4(f)
+					img4, err := img4.Open(f)
 					if err != nil {
 						return fmt.Errorf("failed to open img4: %v", err)
 					}
-					tc, err := fwcmd.ParseTrustCache(img4.IM4P.Data)
+					tc, err := fwcmd.ParseTrustCache(img4.Payload.Data)
 					if err != nil {
 						return fmt.Errorf("failed to parse trust cache: %v", err)
 					}
 					tcs[f] = tc
 				} else if ok, _ := magic.IsIm4p(f); ok {
 					log.WithField("file", f).Debug("Processing IM4P file")
-					im4p, err := img4.OpenIm4p(f)
+					im4p, err := img4.OpenPayload(f)
 					if err != nil {
 						return err
 					}
@@ -109,18 +124,18 @@ var tcCmd = &cobra.Command{
 		} else {
 			if ok, _ := magic.IsImg4(filepath.Clean(args[0])); ok {
 				log.WithField("file", filepath.Clean(args[0])).Debug("Processing IMG4 file")
-				img4, err := img4.OpenImg4(filepath.Clean(args[0]))
+				img4, err := img4.Open(filepath.Clean(args[0]))
 				if err != nil {
 					return fmt.Errorf("failed to open img4: %v", err)
 				}
-				tc, err := fwcmd.ParseTrustCache(img4.IM4P.Data)
+				tc, err := fwcmd.ParseTrustCache(img4.Payload.Data)
 				if err != nil {
 					return fmt.Errorf("failed to parse trust cache: %v", err)
 				}
 				tcs[filepath.Clean(args[0])] = tc
 			} else if ok, _ := magic.IsIm4p(filepath.Clean(args[0])); ok {
 				log.WithField("file", filepath.Clean(args[0])).Debug("Processing IM4P file")
-				im4p, err := img4.OpenIm4p(filepath.Clean(args[0]))
+				im4p, err := img4.OpenPayload(filepath.Clean(args[0]))
 				if err != nil {
 					return err
 				}

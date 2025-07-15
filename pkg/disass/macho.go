@@ -6,15 +6,17 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/apex/log"
 	"github.com/blacktop/arm64-cgo/disassemble"
 	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/pkg/fixupchains"
+	"github.com/blacktop/go-macho/types/objc"
 	"github.com/blacktop/ipsw/internal/demangle"
 	"github.com/blacktop/ipsw/internal/swift"
 	"github.com/blacktop/ipsw/internal/utils"
@@ -22,15 +24,16 @@ import (
 )
 
 type MachoDisass struct {
-	f     *macho.File
-	cfg   *Config
-	tr    *Triage
-	a2s   map[uint64]string
-	sinfo map[uint64]uint64
+	f         *macho.File
+	cfg       *Config
+	tr        *Triage
+	a2s       map[uint64]string
+	sinfo     map[uint64]uint64
+	swiftstrs map[uint64]string
 }
 
-func NewMachoDisass(f *macho.File, a2s *map[uint64]string, cfg *Config) *MachoDisass {
-	return &MachoDisass{f: f, a2s: *a2s, cfg: cfg}
+func NewMachoDisass(f *macho.File, cfg *Config) *MachoDisass {
+	return &MachoDisass{f: f, cfg: cfg, a2s: make(map[uint64]string, 0), swiftstrs: make(map[uint64]string, 0)}
 }
 
 func (d MachoDisass) Demangle() bool {
@@ -283,10 +286,8 @@ func (d MachoDisass) IsLocation(imm uint64) bool {
 // IsBranchLocation returns if given address is branch to a location instruction
 func (d MachoDisass) IsBranchLocation(addr uint64) (bool, uint64) {
 	for loc, addrs := range d.tr.Locations {
-		for _, a := range addrs {
-			if a == addr {
-				return true, loc
-			}
+		if slices.Contains(addrs, addr) {
+			return true, loc
 		}
 	}
 	return false, 0
@@ -323,6 +324,13 @@ func (d MachoDisass) FindSymbol(addr uint64) (string, bool) {
 	return "", false
 }
 
+func (d MachoDisass) FindSwiftString(addr uint64) (string, bool) {
+	if str, ok := d.swiftstrs[addr]; ok {
+		return str, true
+	}
+	return "", false
+}
+
 // Contains returns true if Triage immediates contains a given address and will return the instruction address
 func (d MachoDisass) Contains(address uint64) (bool, uint64) {
 	for loc, addr := range d.tr.Addresses {
@@ -339,12 +347,8 @@ func (d MachoDisass) GetCString(addr uint64) (string, error) {
 
 func (d MachoDisass) Analyze() error {
 
-	for _, fn := range d.f.GetFunctions() {
-		d.a2s[fn.StartAddr] = fmt.Sprintf("sub_%x", fn.StartAddr)
-	}
-
-	for _, sym := range d.f.Symtab.Syms {
-		d.a2s[sym.Value] = sym.Name
+	if err := d.parseSymbols(); err != nil {
+		return fmt.Errorf("failed to parse symbols: %v", err)
 	}
 
 	if err := d.parseImports(); err != nil {
@@ -353,6 +357,10 @@ func (d MachoDisass) Analyze() error {
 
 	if err := d.parseObjC(); err != nil {
 		return fmt.Errorf("failed to parse objc runtime: %v", err)
+	}
+
+	if err := d.parseSwift(); err != nil {
+		return fmt.Errorf("failed to parse swift: %v", err)
 	}
 
 	if err := d.parseRebaseInfo(); err != nil {
@@ -375,6 +383,50 @@ func (d MachoDisass) Analyze() error {
 		return fmt.Errorf("failed to parse symbol stubs: %v", err)
 	}
 
+	if a2s, err := d.FindSwiftStrings(); err == nil {
+		maps.Copy(d.swiftstrs, a2s)
+	} else {
+		return fmt.Errorf("failed to find swift strings: %v", err)
+	}
+
+	return nil
+}
+
+func (d *MachoDisass) parseSymbols() error {
+	for _, sym := range d.f.Symtab.Syms {
+		if sym.Value > 0 && len(sym.Name) > 0 {
+			if d.cfg.Demangle {
+				if strings.HasPrefix(sym.Name, "_$s") { // TODO: better detect swift symbols
+					sym.Name, _ = swift.Demangle(sym.Name)
+					d.a2s[sym.Value] = sym.Name
+				} else {
+					d.a2s[sym.Value] = demangle.Do(sym.Name, false, false)
+				}
+			} else {
+				d.a2s[sym.Value] = sym.Name
+			}
+		}
+	}
+	exports, err := d.f.GetExports()
+	if err != nil {
+		if err != macho.ErrMachODyldInfoNotFound {
+			return fmt.Errorf("failed to get exports: %v", err)
+		}
+	}
+	for _, sym := range exports {
+		if sym.Address > 0 {
+			if d.cfg.Demangle && len(sym.Name) > 0 {
+				if strings.HasPrefix(sym.Name, "_$s") { // TODO: better detect swift symbols
+					sym.Name, _ = swift.Demangle(sym.Name)
+					d.a2s[sym.Address] = sym.Name
+				} else {
+					d.a2s[sym.Address] = demangle.Do(sym.Name, false, false)
+				}
+			} else {
+				d.a2s[sym.Address] = sym.Name
+			}
+		}
+	}
 	return nil
 }
 
@@ -442,6 +494,22 @@ func (d *MachoDisass) parseObjC() error {
 				d.a2s[d.f.GetBaseAddress()+sel.VMAddr] = sel.Name
 			}
 		}
+		if classes, err := d.f.GetObjCClasses(); err == nil {
+			for _, class := range classes {
+				d.a2s[class.ClassPtr] = fmt.Sprintf("class_%s", class.Name)
+				d.a2s[class.IsaVMAddr] = fmt.Sprintf("objc_isa_%s", class.Isa)
+				for _, meth := range class.ClassMethods {
+					if len(meth.Name) > 0 {
+						d.a2s[meth.ImpVMAddr] = fmt.Sprintf("+[%s %s]", class.Name, meth.Name)
+					}
+				}
+				for _, imeth := range class.InstanceMethods {
+					if len(imeth.Name) > 0 {
+						d.a2s[imeth.ImpVMAddr] = fmt.Sprintf("-[%s %s]", class.Name, imeth.Name)
+					}
+				}
+			}
+		}
 		if classRefs, err := d.f.GetObjCClassReferences(); err == nil {
 			for off, class := range classRefs {
 				d.a2s[off] = fmt.Sprintf("class_%s", class.Name)
@@ -451,7 +519,8 @@ func (d *MachoDisass) parseObjC() error {
 		if superRefs, err := d.f.GetObjCSuperReferences(); err == nil {
 			for off, class := range superRefs {
 				d.a2s[off] = fmt.Sprintf("class_%s", class.Name)
-				d.a2s[d.f.GetBaseAddress()+class.ClassPtr] = class.Name
+				d.a2s[class.ClassPtr] = class.Name
+				d.a2s[class.IsaVMAddr] = class.Isa
 			}
 		}
 		if protoRefs, err := d.f.GetObjCProtoReferences(); err == nil {
@@ -460,8 +529,84 @@ func (d *MachoDisass) parseObjC() error {
 				d.a2s[d.f.GetBaseAddress()+proto.Ptr] = proto.Name
 			}
 		}
+		if objcStubs, err := d.f.GetObjCStubs(func(addr uint64, data []byte) (map[uint64]*objc.Stub, error) {
+			stubs := make(map[uint64]*objc.Stub)
+			addr2sel, err := ParseStubsASM(data, addr, func(u uint64) (uint64, error) {
+				ptr, err := d.f.GetPointerAtAddress(u)
+				if err != nil {
+					return 0, err
+				}
+				if name, err := d.f.GetBindName(ptr); err == nil && name == "_objc_msgSend" {
+					return 0, nil
+				}
+				ptr = d.f.SlidePointer(ptr)
+				if ptr < d.f.GetBaseAddress() {
+					return ptr + d.f.GetBaseAddress(), nil
+				}
+				return ptr, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			for addr, sel := range addr2sel {
+				if d.a2s[sel] != "_objc_msgSend" {
+					stubs[addr] = &objc.Stub{
+						Name:        d.a2s[sel],
+						SelectorRef: sel,
+					}
+				}
+			}
+			return stubs, nil
+		}); err == nil {
+			for addr, stub := range objcStubs {
+				if len(stub.Name) > 0 {
+					d.a2s[addr] = fmt.Sprintf("j__objc_msgSend(x0, \"%s\")", stub.Name)
+				}
+			}
+		}
 	}
 
+	return nil
+}
+
+func (d *MachoDisass) parseSwift() error {
+	if d.f.HasSwift() {
+		if types, err := d.f.GetSwiftTypes(); err == nil {
+			for _, typ := range types {
+				if typ.Name != "" {
+					if d.cfg.Demangle {
+						typ.Name, _ = swift.Demangle(typ.Name)
+					}
+					d.a2s[typ.Address] = fmt.Sprintf("type descriptor for %s", typ.Name)
+				}
+			}
+		}
+		if fields, err := d.f.GetSwiftFields(); err == nil {
+			for _, field := range fields {
+				if field.Type != "" {
+					if d.cfg.Demangle {
+						field.Type, _ = swift.Demangle(field.Type)
+					}
+					d.a2s[field.Address] = fmt.Sprintf("field descriptor for %s", field.Type)
+				}
+			}
+		}
+		if dtds, err := d.f.GetSwiftProtocolConformances(); err == nil {
+			for _, dtd := range dtds {
+				if dtd.TypeRef.Name != "" {
+					if dtd.TypeRef.Parent != nil && dtd.TypeRef.Parent.Name != "" &&
+						dtd.TypeRef.Parent.Parent != nil && dtd.TypeRef.Parent.Parent.Name != "" {
+						dtd.TypeRef.Name = fmt.Sprintf("%s.%s", dtd.TypeRef.Parent, dtd.TypeRef.Name)
+					}
+					if d.cfg.Demangle {
+						dtd.Protocol, _ = swift.DemangleSimple(dtd.Protocol)
+					}
+					// log.Debugf("nominal type descriptor for %s : %s", dtd.TypeRef.Name, dtd.Protocol)
+					d.a2s[dtd.TypeRef.Address] = fmt.Sprintf("nominal type descriptor for %s : %s", dtd.TypeRef.Name, dtd.Protocol)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -567,49 +712,149 @@ func (d *MachoDisass) parseHelpers() error {
 	return nil
 }
 
-func (d *MachoDisass) SaveAddrToSymMap(dest string) error {
-	var err error
-	var of *os.File
+func (d *MachoDisass) EmptySymMap() bool {
+	return len(d.a2s) == 0
+}
+
+func (d *MachoDisass) SetStartSym(addr uint64) {
+	d.a2s[addr] = "start"
+}
+
+func (d *MachoDisass) loadDwarf(machoPath string) error {
+	dsymPath := filepath.Join(machoPath+".dSYM", "Contents/Resources/DWARF", filepath.Base(machoPath))
+	if _, statErr := os.Stat(dsymPath); statErr == nil {
+		dm, err := macho.Open(dsymPath)
+		if err != nil {
+			return fmt.Errorf("failed to open dSYM file: %v", err)
+		} else {
+			foundDSYMSymbols := false
+			for _, sym := range dm.Symtab.Syms {
+				if sym.Name != "" {
+					name := sym.Name
+					if d.cfg.Demangle {
+						if strings.HasPrefix(name, "_$s") {
+							name, _ = swift.Demangle(name)
+						} else {
+							name = demangle.Do(name, false, false)
+						}
+					}
+					d.a2s[sym.Value] = name
+					foundDSYMSymbols = true
+				}
+			}
+			dm.Close()
+			if foundDSYMSymbols {
+				utils.Indent(log.Info, 2)(fmt.Sprintf("Loaded %d symbols from .dSYM file", len(d.a2s)))
+			} else {
+				utils.Indent(log.Warn, 2)("No symbols found in dSYM file")
+			}
+		}
+	}
+	return nil
+}
+
+func (d *MachoDisass) getTempCachePath(cacheFile *string) string {
+	var tmpfile string
+	if d.f != nil {
+		uuid := d.f.UUID()
+		if uuid.UUID.IsNull() {
+			tmpfile = filepath.Base(*cacheFile)
+		} else {
+			tmpfile = uuid.String() + ".a2s"
+		}
+	}
+	return filepath.Join(os.TempDir(), tmpfile)
+}
+
+var ErrCorruptCache = errors.New("corrupt cache file")
+
+func (d *MachoDisass) loadCache(cacheFile *string) error {
+	f, err := os.Open(*cacheFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("failed to open cache file %s: %v", *cacheFile, err)
+	}
+	defer f.Close()
+
+	a2s := make(map[uint64]string)
+	if gobErr := gob.NewDecoder(f).Decode(&a2s); gobErr != nil {
+		return ErrCorruptCache
+	}
+
+	maps.Copy(d.a2s, a2s)
+	log.Infof("Loaded %d symbols from cache file: %s", len(d.a2s), *cacheFile)
+
+	return nil
+}
+
+func (d *MachoDisass) OpenOrCreateSymMap(cacheFile *string, machoPath string) error {
+	if err := d.loadCache(cacheFile); err == nil {
+		return nil // cache file loaded successfully
+	} else if errors.Is(err, os.ErrNotExist) {
+		tmpcache := d.getTempCachePath(cacheFile)
+		if err := d.loadCache(&tmpcache); err == nil {
+			*cacheFile = tmpcache
+			return nil // temp cache file loaded successfully
+		} else if errors.Is(err, os.ErrNotExist) {
+			// cache AND temp cache files do not exist (create new one)
+		} else if errors.Is(err, ErrCorruptCache) {
+			log.Warn("temp cache file is corrupt, recreating it")
+			if err := os.Remove(tmpcache); err != nil {
+				return fmt.Errorf("failed to remove temp cache file: %v", err)
+			}
+		} else {
+			return fmt.Errorf("failed to load temp cache file: %v", err)
+		}
+	} else if errors.Is(err, ErrCorruptCache) {
+		log.Warn("cache file is corrupt, recreating it")
+		if err := os.Remove(*cacheFile); err != nil {
+			return fmt.Errorf("failed to remove cache file: %v", err)
+		}
+	} else {
+		return fmt.Errorf("failed to load cache file: %v", err)
+	}
+	// load the .dSYM file if it exists
+	if err := d.loadDwarf(machoPath); err != nil {
+		return fmt.Errorf("failed to load dSYM file: %v", err)
+	}
+	if _, err := os.Create(*cacheFile); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			var e *os.PathError
+			if errors.As(err, &e) {
+				log.Errorf("failed to create symbol cache file %s (most likely a read-only location): %v", filepath.Base(e.Path), e.Err)
+			}
+			tmpcache := d.getTempCachePath(cacheFile)
+			if _, err := os.Create(tmpcache); err != nil {
+				return fmt.Errorf("failed to create temp cache file: %v", err)
+			}
+			utils.Indent(log.Warn, 2)("creating in the temp folder")
+			utils.Indent(log.Warn, 3)(fmt.Sprintf("to use in the future supply the flag: --cache %s ", tmpcache))
+			*cacheFile = tmpcache
+			return nil // Successfully created temp cache file
+		}
+		return fmt.Errorf("failed to create cache file: %v", err)
+	}
+
+	return nil
+}
+
+func (d *MachoDisass) SaveAddrToSymMap(dest string) (err error) {
+	f, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open symbol cache file %s: %v", dest, err)
+	}
+	defer f.Close()
 
 	buff := new(bytes.Buffer)
 
-	of, err = os.Create(dest)
-	if errors.Is(err, os.ErrPermission) {
-		var e *os.PathError
-		if errors.As(err, &e) {
-			log.Errorf("failed to create address to symbol cache file %s (%v)", e.Path, e.Err)
-		}
-		tmpDir := os.TempDir()
-		if runtime.GOOS == "darwin" {
-			tmpDir = "/tmp"
-		}
-		tempa2sfile := filepath.Join(tmpDir, dest)
-		of, err = os.Create(tempa2sfile)
-		if err != nil {
-			return err
-		}
-		utils.Indent(log.Warn, 2)("creating in the temp folder")
-		utils.Indent(log.Warn, 3)(fmt.Sprintf("to use in the future you must supply the flag: --cache %s ", tempa2sfile))
-	} else if err != nil {
-		return fmt.Errorf("failed to open address to symbol cache file %s: %v", dest, err)
-	}
-	defer of.Close()
-
-	e := gob.NewEncoder(buff)
-
 	// Encoding the map
-	err = e.Encode(d.a2s)
-	if err != nil {
+	if err := gob.NewEncoder(buff).Encode(d.a2s); err != nil {
 		return fmt.Errorf("failed to encode addr2sym map to binary: %v", err)
 	}
-
-	// gzw := gzip.NewWriter(of)
-	// defer gzw.Close()
-
-	// _, err = buff.WriteTo(gzw)
-	_, err = buff.WriteTo(of)
-	if err != nil {
-		return fmt.Errorf("failed to write addr2sym map to gzip file: %v", err)
+	if _, err := buff.WriteTo(f); err != nil {
+		return fmt.Errorf("failed to write addr2sym map to file: %v", err)
 	}
 
 	return nil

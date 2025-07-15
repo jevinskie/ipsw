@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/blacktop/arm64-cgo/disassemble"
@@ -59,12 +60,7 @@ func (d DyldDisass) Dylibs() []*CacheImage {
 }
 
 func (d DyldDisass) hasDep(img *CacheImage) bool {
-	for _, i := range d.dylibs {
-		if i == img {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.dylibs, img)
 }
 
 // Contains returns true if Triage immediates contains a given address and will return the instruction address
@@ -97,10 +93,8 @@ func (d DyldDisass) IsLocation(imm uint64) bool {
 // IsBranchLocation returns if given address is branch to a location instruction
 func (d DyldDisass) IsBranchLocation(addr uint64) (bool, uint64) {
 	for loc, addrs := range d.tr.Locations {
-		for _, a := range addrs {
-			if a == addr {
-				return true, loc
-			}
+		if slices.Contains(addrs, addr) {
+			return true, loc
 		}
 	}
 	return false, 0
@@ -178,7 +172,8 @@ func (d *DyldDisass) Triage() error {
 			(instruction.Operation == disassemble.ARM64_ADD ||
 				instruction.Operation == disassemble.ARM64_LDR ||
 				instruction.Operation == disassemble.ARM64_LDRB ||
-				instruction.Operation == disassemble.ARM64_LDRSW) {
+				instruction.Operation == disassemble.ARM64_LDRSW ||
+				instruction.Operation == disassemble.ARM64_STRB) {
 			adrpRegister := prevInstr.Operands[0].Registers[0]
 			adrpImm := prevInstr.Operands[1].Immediate
 			if instruction.Operation == disassemble.ARM64_LDR && adrpRegister == instruction.Operands[1].Registers[0] {
@@ -188,6 +183,8 @@ func (d *DyldDisass) Triage() error {
 			} else if instruction.Operation == disassemble.ARM64_ADD && adrpRegister == instruction.Operands[1].Registers[0] {
 				adrpImm += instruction.Operands[2].Immediate
 			} else if instruction.Operation == disassemble.ARM64_LDRSW && adrpRegister == instruction.Operands[1].Registers[0] {
+				adrpImm += instruction.Operands[1].Immediate
+			} else if instruction.Operation == disassemble.ARM64_STRB && adrpRegister == instruction.Operands[1].Registers[0] {
 				adrpImm += instruction.Operands[1].Immediate
 			}
 			d.tr.Addresses[instruction.Address] = adrpImm
@@ -360,6 +357,13 @@ func (d DyldDisass) FindSymbol(addr uint64) (string, bool) {
 			return demangle.Do(symName, false, false), true
 		}
 		return symName, true
+	}
+	return "", false
+}
+
+func (d DyldDisass) FindSwiftString(addr uint64) (string, bool) {
+	if str, ok := d.f.AddressToSymbol[addr]; ok {
+		return str, true
 	}
 	return "", false
 }

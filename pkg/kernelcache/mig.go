@@ -1,6 +1,6 @@
 package kernelcache
 
-//go:generate stringer -type=SubsystemStart -output mig_string.go
+//go:generate go tool stringer -type=SubsystemStart -output mig_string.go
 
 import (
 	"bytes"
@@ -258,7 +258,7 @@ func getMigInitFunc(m *macho.File) (*types.Function, error) {
 		return nil, fmt.Errorf("failed to get data from __TEXT_EXEC.__text section: %v", err)
 	}
 
-	engine := disass.NewMachoDisass(m, &map[uint64]string{}, &disass.Config{
+	engine := disass.NewMachoDisass(m, &disass.Config{
 		Data:         data,
 		StartAddress: text.Addr,
 		Quite:        true,
@@ -430,7 +430,7 @@ func GetMigSubsystems(m *macho.File) ([]MigKernSubsystem, error) {
 
 	var migs []MigKernSubsystem
 
-	for i := 0; i < len(subsystems); i++ {
+	for i := range subsystems {
 		r.Seek(int64(subsystems[i]-dataConst.Addr), io.SeekStart)
 
 		var mig MigKernSubsystem

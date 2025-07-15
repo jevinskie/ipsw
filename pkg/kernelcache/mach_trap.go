@@ -155,14 +155,12 @@ func getKernelInvalidAddress(m *macho.File) (uint64, error) {
 		return 0, err
 	}
 
-	symbolMap := make(map[uint64]string)
-
 	data, err := m.Section("__TEXT_EXEC", "__text").Data()
 	if err != nil {
 		return 0, err
 	}
 
-	engine := disass.NewMachoDisass(m, &symbolMap, &disass.Config{
+	engine := disass.NewMachoDisass(m, &disass.Config{
 		Data:         data,
 		StartAddress: m.Section("__TEXT_EXEC", "__text").Addr,
 	})
@@ -293,7 +291,7 @@ func GetMachTrapTable(m *macho.File) ([]MachTrap, error) {
 
 		// TODO: after the mach_trap_table are the 'mach_trap_names' array (in macOS or non stripped kernels) we should parse to get NEW trap names etc
 
-		for i := 0; i < len(mtrapts); i++ {
+		for i := range mtrapts {
 			mtrapts[i].Function = m.SlidePointer(mtrapts[i].Function)
 			mtrapts[i].ArgMunge32 = m.SlidePointer(mtrapts[i].ArgMunge32)
 			mtrap, err := syscalls.GetMachSyscallByNumber(i)

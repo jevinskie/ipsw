@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -60,9 +61,7 @@ func GetDatabase(conf *Config) (map[string]string, error) {
 				if ents, err := scanEnts(conf.IPSW, appOS, "AppOS", conf.PemDB); err != nil {
 					return nil, fmt.Errorf("failed to scan files in AppOS %s: %v", appOS, err)
 				} else {
-					for k, v := range ents {
-						entDB[k] = v
-					}
+					maps.Copy(entDB, ents)
 				}
 			}
 			if systemOS, err := i.GetSystemOsDmg(); err == nil {
@@ -70,29 +69,23 @@ func GetDatabase(conf *Config) (map[string]string, error) {
 				if ents, err := scanEnts(conf.IPSW, systemOS, "SystemOS", conf.PemDB); err != nil {
 					return nil, fmt.Errorf("failed to scan files in SystemOS %s: %v", systemOS, err)
 				} else {
-					for k, v := range ents {
-						entDB[k] = v
-					}
+					maps.Copy(entDB, ents)
 				}
 			}
 			if fsOS, err := i.GetFileSystemOsDmg(); err == nil {
-				utils.Indent(log.Info, 3)("Scanning filesystem")
+				utils.Indent(log.Info, 3)("Scanning FileSystem")
 				if ents, err := scanEnts(conf.IPSW, fsOS, "filesystem", conf.PemDB); err != nil {
-					return nil, fmt.Errorf("failed to scan files in filesystem %s: %v", fsOS, err)
+					return nil, fmt.Errorf("failed to scan files in FileSystem %s: %v", fsOS, err)
 				} else {
-					for k, v := range ents {
-						entDB[k] = v
-					}
+					maps.Copy(entDB, ents)
 				}
 			}
 			if excOS, err := i.GetExclaveOSDmg(); err == nil {
-				utils.Indent(log.Info, 3)("Scanning filesystem")
+				utils.Indent(log.Info, 3)("Scanning ExclaveOS")
 				if ents, err := scanEnts(conf.IPSW, excOS, "ExclaveOS", conf.PemDB); err != nil {
 					return nil, fmt.Errorf("failed to scan files in ExclaveOS %s: %v", excOS, err)
 				} else {
-					for k, v := range ents {
-						entDB[k] = v
-					}
+					maps.Copy(entDB, ents)
 				}
 			}
 		}

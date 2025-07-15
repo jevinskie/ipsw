@@ -26,10 +26,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/commands/mount"
+	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +41,8 @@ import (
 func init() {
 	rootCmd.AddCommand(mountCmd)
 
+	mountCmd.Flags().StringP("key", "k", "", "DMG key")
+	mountCmd.Flags().Bool("lookup", false, "Lookup DMG keys on theapplewiki.com")
 	mountCmd.Flags().String("pem-db", "", "AEA pem DB JSON file")
 }
 
@@ -48,21 +54,79 @@ var mountCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Args:          cobra.ExactArgs(2),
+	Example: heredoc.Doc(`
+		# Mount the filesystem DMG from an IPSW
+		$ ipsw mount fs iPhone15,2_16.5_20F66_Restore.ipsw
+
+		# Mount the system DMG with a specific decryption key
+		$ ipsw mount sys iPhone.ipsw --key "a1b2c3d4e5f6..."
+
+		# Mount fs DMG and lookup keys from theapplewiki.com
+		$ ipsw mount fs iPod5,1_7.1.2_11D257_Restore.ipsw --lookup
+
+		# Mount dyld shared cache (exc) DMG with AEA pem DB
+		$ ipsw mount exc iPhone.ipsw --pem-db /path/to/pem.json
+	`),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) == 0 {
 			return mount.DmgTypes, cobra.ShellCompDirectiveNoFileComp
 		}
 		return []string{"ipsw"}, cobra.ShellCompDirectiveFilterFileExt
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
+		// set log level
 		if Verbose {
 			log.SetLevel(log.DebugLevel)
 		}
 
+		// flags
+		key, _ := cmd.Flags().GetString("key")
+		lookupKeys, _ := cmd.Flags().GetBool("lookup")
 		pemDB, _ := cmd.Flags().GetString("pem-db")
+		// validate flags
+		if len(key) > 0 && lookupKeys {
+			return fmt.Errorf("cannot use --key AND --lookup flags together")
+		}
 
-		mctx, err := mount.DmgInIPSW(args[1], args[0], pemDB)
+		var keys any
+		if lookupKeys {
+			var (
+				device  string
+				version string
+				build   string
+			)
+			re := regexp.MustCompile(`(?P<device>.+)_(?P<version>.+)_(?P<build>.+)_(?i)Restore\.ipsw$`)
+			if re.MatchString(args[1]) {
+				matches := re.FindStringSubmatch(args[1])
+				if len(matches) < 4 {
+					return fmt.Errorf("failed to parse IPSW filename: %s", args[1])
+				}
+				device = filepath.Base(matches[1])
+				version = matches[2]
+				build = matches[3]
+			} else {
+				return fmt.Errorf("failed to parse IPSW filename: %s", args[1])
+			}
+			if device == "" || build == "" {
+				return fmt.Errorf("device or build information is missing from IPSW filename (required for key lookup)")
+			}
+			log.Info("Downloading Keys...")
+			wikiKeys, err := download.GetWikiFirmwareKeys(&download.WikiConfig{
+				Keys:    true,
+				Device:  strings.Replace(device, "ip", "iP", 1),
+				Version: version,
+				Build:   strings.ToUpper(build),
+				// Beta:    viper.GetBool("download.key.beta"),
+			}, "", false)
+			if err != nil {
+				return fmt.Errorf("failed querying theapplewiki.com: %v", err)
+			}
+			keys = wikiKeys
+		} else if len(key) > 0 {
+			keys = key
+		}
+
+		mctx, err := mount.DmgInIPSW(args[1], args[0], pemDB, keys)
 		if err != nil {
 			return fmt.Errorf("failed to mount %s DMG: %v", args[0], err)
 		}

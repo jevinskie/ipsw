@@ -23,10 +23,10 @@ package kernel
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/apex/log"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/kernelcache"
 	"github.com/fatih/color"
@@ -37,15 +37,22 @@ import (
 func init() {
 	KernelcacheCmd.AddCommand(kextsCmd)
 	kextsCmd.Flags().BoolP("diff", "d", false, "Diff two kernel's kexts")
+	kextsCmd.Flags().BoolP("json", "j", false, "Output kexts as JSON")
+	kextsCmd.Flags().StringP("arch", "a", "", "Which architecture to use for fat/universal MachO")
+	viper.BindPFlag("kernel.kexts.diff", kextsCmd.Flags().Lookup("diff"))
+	viper.BindPFlag("kernel.kexts.json", kextsCmd.Flags().Lookup("json"))
+	viper.BindPFlag("kernel.kexts.arch", kextsCmd.Flags().Lookup("arch"))
 	kextsCmd.MarkZshCompPositionalArgumentFile(1, "kernelcache*")
 }
 
 // kextsCmd represents the kexts command
 var kextsCmd = &cobra.Command{
-	Use:     "kexts <kernelcache>",
-	Aliases: []string{"k"},
-	Short:   "List kernel extentions",
-	Args:    cobra.MinimumNArgs(1),
+	Use:           "kexts <kernelcache>",
+	Aliases:       []string{"k"},
+	Short:         "List kernel extentions",
+	Args:          cobra.MinimumNArgs(1),
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
@@ -53,22 +60,44 @@ var kextsCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		diff, _ := cmd.Flags().GetBool("diff")
-
-		if _, err := os.Stat(args[0]); os.IsNotExist(err) {
-			return fmt.Errorf("file %s does not exist", args[0])
+		// flags
+		selectedArch := viper.GetString("kernel.kexts.arch")
+		// validate flags
+		if viper.GetBool("kernel.kexts.diff") && viper.GetBool("kernel.kexts.json") {
+			return fmt.Errorf("cannot use --diff and --json flags together")
 		}
 
-		if diff {
+		if viper.GetBool("kernel.kexts.diff") {
 			if len(args) < 2 {
 				return fmt.Errorf("please provide two kernelcache files to diff")
 			}
 
-			kout1, err := kernelcache.KextList(args[0], true)
+			m1, err := mcmd.OpenMachO(args[0], selectedArch)
 			if err != nil {
 				return err
 			}
-			kout2, err := kernelcache.KextList(args[1], true)
+			defer func() {
+				if err := m1.Close(); err != nil {
+					log.WithError(err).Error("failed to close file: " + args[0])
+				}
+			}()
+
+			kout1, err := kernelcache.KextList(m1.File, true)
+			if err != nil {
+				return err
+			}
+
+			m2, err := mcmd.OpenMachO(args[1], selectedArch)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := m2.Close(); err != nil {
+					log.WithError(err).Error("failed to close file: " + args[1])
+				}
+			}()
+
+			kout2, err := kernelcache.KextList(m2.File, true)
 			if err != nil {
 				return err
 			}
@@ -87,13 +116,31 @@ var kextsCmd = &cobra.Command{
 			log.Info("Differences found")
 			fmt.Println(out)
 		} else {
-			kout, err := kernelcache.KextList(args[0], false)
+			m, err := mcmd.OpenMachO(args[0], selectedArch)
 			if err != nil {
 				return err
 			}
-			log.WithField("count", len(kout)).Info("Kexts")
-			for _, k := range kout {
-				fmt.Println(k)
+			defer func() {
+				if err := m.Close(); err != nil {
+					log.WithError(err).Error("failed to close file: " + args[0])
+				}
+			}()
+
+			if viper.GetBool("kernel.kexts.json") {
+				kexts, err := kernelcache.KextJSON(m.File)
+				if err != nil {
+					return err
+				}
+				fmt.Println(kexts)
+			} else {
+				kout, err := kernelcache.KextList(m.File, false)
+				if err != nil {
+					return err
+				}
+				log.WithField("count", len(kout)).Info("Kexts")
+				for _, k := range kout {
+					fmt.Println(k)
+				}
 			}
 		}
 

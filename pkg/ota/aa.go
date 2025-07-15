@@ -106,10 +106,13 @@ func Open(name string, symmetricKey ...string) (*AA, error) {
 		return nil, err
 	} else if isAEA { // check if file is AEA encrypted
 		var key string
-		if len(symmetricKey) > 0 {
+		if len(symmetricKey) > 0 && symmetricKey[0] != "" {
 			key = symmetricKey[0]
 		} else {
-			key, _ = getKeyFromName(name)
+			key, err = getKeyFromName(name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get key from name: %v (must supply --key-val)", err)
+			}
 		}
 		name, err = aea.Decrypt(&aea.DecryptConfig{
 			Input:     name,
@@ -152,7 +155,18 @@ func Open(name string, symmetricKey ...string) (*AA, error) {
 func (a *AA) Info() (*info.Info, error) {
 	var pfiles []fs.File
 	for _, file := range a.Files() {
-		if filepath.Ext(file.Name()) == ".plist" || regexp.MustCompile(`.*DeviceTree.*im4p$`).MatchString(file.Name()) {
+		switch {
+		case regexp.MustCompile(`.*DeviceTree.*im4p$`).MatchString(file.Path()):
+			fallthrough
+		case regexp.MustCompile(`^Info.plist$`).MatchString(file.Path()):
+			fallthrough
+		case regexp.MustCompile(`^AssetData/Info.plist$`).MatchString(file.Path()):
+			fallthrough
+		case regexp.MustCompile(`Restore.plist$`).MatchString(file.Path()):
+			fallthrough
+		case regexp.MustCompile(`BuildManifest.plist$`).MatchString(file.Path()):
+			fallthrough
+		case regexp.MustCompile(`SystemVersion.plist$`).MatchString(file.Path()):
 			f, err := a.Open(file.Path(), true)
 			if err != nil {
 				return nil, err
@@ -183,9 +197,9 @@ func (r *Reader) initZip(rdr io.ReaderAt, size int64) (err error) {
 
 func (r *Reader) init(rdr io.ReaderAt, size int64) (err error) {
 	r.r = rdr
+	r.yaa = &yaa.YAA{}
 	rs := io.NewSectionReader(rdr, 0, size)
-	r.yaa, err = yaa.Parse(rs)
-	if err != nil {
+	if err := r.yaa.Parse(rs); err != nil {
 		return err
 	}
 	return nil
@@ -317,14 +331,16 @@ func (r *Reader) initFileList() (ferr error) {
 					files[name] = idx
 				}
 			}
-			// TODO: some of these aren't in the payloads ??
 			// add BOM files
 			bomFiles, err := r.yaa.PostBOM()
 			if err != nil {
-				ferr = err
-				return
+				if !errors.Is(err, yaa.ErrPostBomNotFound) {
+					ferr = err
+					return
+				}
+			} else {
+				r.bomFiles = bomFiles
 			}
-			r.bomFiles = bomFiles
 		}
 
 		sort.Slice(r.fileList, func(i, j int) bool { return fileEntryLess(r.fileList[i].name, r.fileList[j].name) })
@@ -371,8 +387,8 @@ func (r *Reader) initPayloadMap() (perr error) {
 					perr = err
 					return
 				}
-				aa, err := yaa.Parse(bytes.NewReader(pbuf.Bytes()))
-				if err != nil {
+				aa := &yaa.YAA{}
+				if err := aa.Parse(bytes.NewReader(pbuf.Bytes())); err != nil {
 					if !errors.Is(err, io.ErrUnexpectedEOF) {
 						perr = fmt.Errorf("failed to parse payload: %v", err)
 						return
@@ -858,6 +874,7 @@ func (f *File) Open(decomp bool) (io.ReadCloser, error) {
 			return f.zfile.Open()
 		}
 	}
+
 	if _, err := f.entry.Read(mdata[:]); err != nil {
 		if err == io.EOF {
 			rc = &otaReader{

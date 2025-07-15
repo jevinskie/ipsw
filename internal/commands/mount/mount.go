@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-apfs/pkg/disk/dmg"
+	"github.com/blacktop/ipsw/internal/download"
+	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/info"
@@ -42,12 +45,26 @@ func (c Context) Unmount() error {
 }
 
 // DmgInIPSW will mount a DMG from an IPSW
-func DmgInIPSW(path, typ, pemDbPath string) (*Context, error) {
+func DmgInIPSW(path, typ, pemDbPath string, keys any) (*Context, error) {
+	var err error
+
 	ipswPath := filepath.Clean(path)
 
-	i, err := info.Parse(ipswPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse IPSW: %v", err)
+	var i *info.Info
+	if wkeys, ok := keys.(download.WikiFWKeys); ok {
+		dtkey, err := wkeys.GetKeyByRegex(`.*DeviceTree.*(img3|im4p)$`)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get DeviceTree key: %v", err)
+		}
+		i, err = info.Parse(ipswPath, dtkey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse IPSW: %v", err)
+		}
+	} else {
+		i, err = info.Parse(ipswPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse IPSW: %v", err)
+		}
 	}
 
 	var dmgPath string
@@ -108,6 +125,31 @@ func DmgInIPSW(path, typ, pemDbPath string) (*Context, error) {
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse AEA encrypted DMG: %v", err)
+		}
+	}
+	if isEncrypted, err := magic.IsEncryptedDMG(extractedDMG); err != nil {
+		return nil, fmt.Errorf("failed to check if DMG is encrypted: %v", err)
+	} else if isEncrypted {
+		var key string
+		switch v := keys.(type) {
+		case string:
+			key = v
+		case download.WikiFWKeys:
+			key, err = v.GetKeyByFilename(extractedDMG)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get key for DMG '%s': %v", extractedDMG, err)
+			}
+		}
+		log.Info("Decrypting DMG...")
+		if dmg, err := dmg.Open(extractedDMG, &dmg.Config{
+			Key: key,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to open DMG '%s': %v", extractedDMG, err)
+		} else {
+			defer dmg.Close()
+			if err := os.Rename(dmg.DecryptedTemp(), extractedDMG); err != nil {
+				return nil, fmt.Errorf("failed to overwrite encrypted DMG with the decrypted one: %v", err)
+			}
 		}
 	}
 

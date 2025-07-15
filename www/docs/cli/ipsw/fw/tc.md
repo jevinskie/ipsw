@@ -20,6 +20,7 @@ ipsw fw tc <IM4P|IPSW> [flags]
   -h, --help            help for tc
   -j, --json            Output in JSON format
   -o, --output string   Folder to extract files to
+  -r, --remote          Parse remote IPSW URL
 ```
 
 ### Options inherited from parent commands

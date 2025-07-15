@@ -30,6 +30,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
@@ -40,6 +41,13 @@ import (
 
 func init() {
 	DownloadCmd.AddCommand(downloadKdkCmd)
+	// Download behavior flags
+	downloadKdkCmd.Flags().String("proxy", "", "HTTP/HTTPS proxy")
+	downloadKdkCmd.Flags().Bool("insecure", false, "do not verify ssl certs")
+	downloadKdkCmd.Flags().Bool("skip-all", false, "always skip resumable IPSWs")
+	downloadKdkCmd.Flags().Bool("resume-all", false, "always resume resumable IPSWs")
+	downloadKdkCmd.Flags().Bool("restart-all", false, "always restart resumable IPSWs")
+	// Command-specific flags
 	downloadKdkCmd.Flags().Bool("host", false, "Download KDK for current host OS")
 	downloadKdkCmd.Flags().StringP("build", "b", "", "Download KDK for build")
 	downloadKdkCmd.Flags().BoolP("latest", "l", false, "Download latest KDK")
@@ -48,17 +56,13 @@ func init() {
 	downloadKdkCmd.Flags().StringP("output", "o", "", "Folder to download files to")
 	downloadKdkCmd.MarkFlagDirname("output")
 	downloadKdkCmd.MarkFlagsMutuallyExclusive("host", "build", "latest", "all")
-	downloadKdkCmd.SetHelpFunc(func(c *cobra.Command, s []string) {
-		DownloadCmd.PersistentFlags().MarkHidden("white-list")
-		DownloadCmd.PersistentFlags().MarkHidden("black-list")
-		DownloadCmd.PersistentFlags().MarkHidden("device")
-		DownloadCmd.PersistentFlags().MarkHidden("model")
-		DownloadCmd.PersistentFlags().MarkHidden("version")
-		DownloadCmd.PersistentFlags().MarkHidden("build")
-		DownloadCmd.PersistentFlags().MarkHidden("confirm")
-		DownloadCmd.PersistentFlags().MarkHidden("remove-commas")
-		c.Parent().HelpFunc()(c, s)
-	})
+	// Bind persistent flags
+	viper.BindPFlag("download.kdk.proxy", downloadKdkCmd.Flags().Lookup("proxy"))
+	viper.BindPFlag("download.kdk.insecure", downloadKdkCmd.Flags().Lookup("insecure"))
+	viper.BindPFlag("download.kdk.skip-all", downloadKdkCmd.Flags().Lookup("skip-all"))
+	viper.BindPFlag("download.kdk.resume-all", downloadKdkCmd.Flags().Lookup("resume-all"))
+	viper.BindPFlag("download.kdk.restart-all", downloadKdkCmd.Flags().Lookup("restart-all"))
+	// Bind command-specific flags
 	viper.BindPFlag("download.kdk.host", downloadKdkCmd.Flags().Lookup("host"))
 	viper.BindPFlag("download.kdk.build", downloadKdkCmd.Flags().Lookup("build"))
 	viper.BindPFlag("download.kdk.latest", downloadKdkCmd.Flags().Lookup("latest"))
@@ -69,11 +73,22 @@ func init() {
 
 // downloadKdkCmd represents the kdk command
 var downloadKdkCmd = &cobra.Command{
-	Use:           "kdk",
-	Short:         "Download KDKs",
-	SilenceUsage:  true,
+	Use:   "kdk",
+	Short: "Download KDKs",
+	Example: heredoc.Doc(`
+		# Download KDK for current host OS
+		❯ ipsw download kdk --host
+
+		# Download KDK for specific build
+		❯ ipsw download kdk --build 20G75
+
+		# Download latest KDK and install
+		❯ ipsw download kdk --latest --install
+
+		# Download all available KDKs
+		❯ ipsw download kdk --all
+	`),
 	SilenceErrors: true,
-	Hidden:        true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
@@ -81,18 +96,12 @@ var downloadKdkCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		viper.BindPFlag("download.proxy", cmd.Flags().Lookup("proxy"))
-		viper.BindPFlag("download.insecure", cmd.Flags().Lookup("insecure"))
-		viper.BindPFlag("download.skip-all", cmd.Flags().Lookup("skip-all"))
-		viper.BindPFlag("download.resume-all", cmd.Flags().Lookup("resume-all"))
-		viper.BindPFlag("download.restart-all", cmd.Flags().Lookup("restart-all"))
-
 		// settings
-		proxy := viper.GetString("download.proxy")
-		insecure := viper.GetBool("download.insecure")
-		skipAll := viper.GetBool("download.skip-all")
-		resumeAll := viper.GetBool("download.resume-all")
-		restartAll := viper.GetBool("download.restart-all")
+		proxy := viper.GetString("download.kdk.proxy")
+		insecure := viper.GetBool("download.kdk.insecure")
+		skipAll := viper.GetBool("download.kdk.skip-all")
+		resumeAll := viper.GetBool("download.kdk.resume-all")
+		restartAll := viper.GetBool("download.kdk.restart-all")
 		// flags
 		forHost := viper.GetBool("download.kdk.host")
 		forBuild := viper.GetString("download.kdk.build")

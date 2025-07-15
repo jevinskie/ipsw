@@ -17,6 +17,7 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-plist"
+	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils/lsof"
 	"github.com/blacktop/ipsw/pkg/aea"
 	semver "github.com/hashicorp/go-version"
@@ -128,17 +129,34 @@ func CodeSign(filePath, signature string) error {
 
 // CodeSignWithEntitlements codesigns a given binary with given entitlements
 func CodeSignWithEntitlements(filePath, entitlementsPath, signature string) error {
-	if runtime.GOOS == "darwin" {
-		cmd := exec.Command("/usr/bin/codesign", "--entitlements", entitlementsPath, "-s", signature, "-f", filepath.Clean(filePath))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%v: %s", err, out)
-		}
-
-		return nil
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("only supported on macOS")
 	}
 
-	return fmt.Errorf("only supported on macOS")
+	return Retry(2, 0, func() error {
+		Indent(log.Info, 2)(fmt.Sprintf("Codesigning '%s' with entitlements", filepath.Base(filePath)))
+		cmd := exec.Command("/usr/bin/codesign", "--entitlements", entitlementsPath, "-s", signature, "-f", filepath.Clean(filePath))
+		out, err := cmd.CombinedOutput()
+
+		if err == nil {
+			return nil
+		}
+
+		if strings.Contains(string(out), "AMFIUnserializeXML: syntax error") {
+			Indent(log.Error, 2)(fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out))))
+			Indent(log.Info, 2)(fmt.Sprintf("Converting entitlements file '%s' to XML1 format", entitlementsPath))
+
+			convertCmd := exec.Command("/usr/bin/plutil", "-convert", "xml1", entitlementsPath)
+			convertOut, convertErr := convertCmd.CombinedOutput()
+			if convertErr != nil {
+				return &StopRetryingError{Err: fmt.Errorf("%v: %s", convertErr, strings.TrimSpace(string(convertOut)))}
+			}
+
+			return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		}
+
+		return &StopRetryingError{Err: fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))}
+	})
 }
 
 // CodeSignAdHoc codesigns a given binary with ad-hoc signature
@@ -174,7 +192,7 @@ func CodesignShow(path string) (string, error) {
 func CreateSparseDiskImage(volumeName, diskPath string) (string, error) {
 	if runtime.GOOS == "darwin" {
 
-		cmd := exec.Command("usr/bin/hdiutil", "create", "-size", "16g", "-fs", "HFS+", "-volname", volumeName, "-type", "SPARSE", "-plist", diskPath)
+		cmd := exec.Command("/usr/bin/hdiutil", "create", "-size", "16g", "-fs", "HFS+", "-volname", volumeName, "-type", "SPARSE", "-plist", diskPath)
 
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -475,21 +493,135 @@ func Mount(image, mountPoint string) error {
 			return fmt.Errorf("%v: %s", err, out)
 		}
 	} else {
-		apfsFusePath, err := execabs.LookPath("apfs-fuse")
-		if err != nil {
-			return fmt.Errorf("failed to find apfs-fuse in $PATH: %v", err)
-		}
-		out, err := exec.Command(apfsFusePath, image, mountPoint).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to mount '%s' via apfs-fuse: %v: cmd output - '%s'", image, err, out)
-		}
+		// On Linux, detect filesystem type and use appropriate FUSE tool
+		return mountLinux(image, mountPoint)
 	}
 
 	return nil
 }
 
-func IsAlreadyMounted(image, mountPoint string) (string, bool, error) {
+// mountLinux mounts a DMG on Linux using the appropriate FUSE tool based on filesystem type
+func mountLinux(image, mountPoint string) error {
+	// First, try to detect the filesystem type
+	isAPFSFilesystem, err := magic.IsAPFS(image)
+	if err != nil {
+		log.Warnf("failed to detect APFS filesystem: %v", err)
+	}
+
+	isHFSPlusFilesystem, err := magic.IsHFSPlus(image)
+	if err != nil {
+		log.Warnf("failed to detect HFS+ filesystem: %v", err)
+	}
+
+	if isAPFSFilesystem {
+		log.Debugf("detected APFS filesystem, using apfs-fuse")
+		return mountWithAPFSFuse(image, mountPoint)
+	} else if isHFSPlusFilesystem {
+		log.Debugf("detected HFS+ filesystem, using native kernel support")
+		return mountWithHFSPlus(image, mountPoint)
+	} else {
+		// Fallback: try APFS first, then HFS+ if that fails
+		log.Debugf("filesystem type unclear, trying apfs-fuse first")
+		if err := mountWithAPFSFuse(image, mountPoint); err != nil {
+			log.Debugf("apfs-fuse failed (%v), trying native HFS+ support", err)
+			return mountWithHFSPlus(image, mountPoint)
+		}
+		return nil
+	}
+}
+
+// findApfsFuse attempts to locate apfs-fuse binary using multiple strategies
+func findApfsFuse() (string, error) {
+	// Check environment variable override first
+	if envPath := os.Getenv("IPSW_APFS_FUSE_PATH"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath, nil
+		}
+		log.Warnf("IPSW_APFS_FUSE_PATH points to non-existent file: %s", envPath)
+	}
+
+	// Try standard PATH lookup
+	if path, err := execabs.LookPath("apfs-fuse"); err == nil {
+		return path, nil
+	}
+
+	// Check common installation locations (helpful for snap/confined environments)
+	commonPaths := []string{
+		"/usr/local/bin/apfs-fuse",
+		"/usr/bin/apfs-fuse",
+		"/opt/apfs-fuse/bin/apfs-fuse",
+		"/snap/bin/apfs-fuse",
+		"/home/linuxbrew/.linuxbrew/bin/apfs-fuse",
+	}
+
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("apfs-fuse not found in PATH or common locations: " +
+		"Install apfs-fuse or set IPSW_APFS_FUSE_PATH environment variable. " +
+		"(snap users: try 'sudo snap connect ipsw:system-files' if available)")
+}
+
+// mountWithAPFSFuse mounts using apfs-fuse
+func mountWithAPFSFuse(image, mountPoint string) error {
+	apfsFusePath, err := findApfsFuse()
+	if err != nil {
+		return fmt.Errorf("failed to find apfs-fuse: %v", err)
+	}
+	out, err := exec.Command(apfsFusePath, image, mountPoint).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to mount '%s' via apfs-fuse: %v: cmd output - '%s'", image, err, out)
+	}
+	return nil
+}
+
+// mountWithHFSPlus mounts using native Linux HFS+ kernel support
+func mountWithHFSPlus(image, mountPoint string) error {
+	// Set up a loop device for the DMG file
+	out, err := exec.Command("losetup", "-f", "--show", image).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to set up loop device for '%s': %v: cmd output - '%s'", image, err, out)
+	}
+
+	loopDevice := strings.TrimSpace(string(out))
+	log.Debugf("created loop device: %s", loopDevice)
+
+	// Mount the loop device using native HFS+ support
+	err = exec.Command("mount", "-t", "hfsplus", "-o", "ro", loopDevice, mountPoint).Run()
+	if err != nil {
+		// Clean up loop device on mount failure
+		if cleanupErr := exec.Command("losetup", "-d", loopDevice).Run(); cleanupErr != nil {
+			log.Warnf("failed to clean up loop device %s: %v", loopDevice, cleanupErr)
+		}
+		return fmt.Errorf("failed to mount HFS+ filesystem '%s': %v (ensure hfsplus kernel module is loaded)", loopDevice, err)
+	}
+
+	log.Debugf("mounted HFS+ filesystem at %s", mountPoint)
+	return nil
+}
+
+func MountEncrypted(image, mountPoint, password string) error {
 	if runtime.GOOS == "darwin" {
+		cmd := exec.Command("/usr/bin/hdiutil", "attach", "-noverify", "-mountpoint", mountPoint, "-stdinpass", image)
+		cmd.Stdin = strings.NewReader(password)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(out), "hdiutil: mount failed - Resource busy") {
+				return ErrMountResourceBusy
+			}
+			return fmt.Errorf("%v: %s", err, out)
+		}
+		return nil
+	}
+	return fmt.Errorf("only supported on macOS")
+}
+
+func IsAlreadyMounted(image, mountPoint string) (string, bool, error) {
+	switch runtime.GOOS {
+	case "darwin":
 		info, err := MountInfo()
 		if err != nil {
 			return "", false, err
@@ -504,7 +636,7 @@ func IsAlreadyMounted(image, mountPoint string) (string, bool, error) {
 				return "", true, nil
 			}
 		}
-	} else if runtime.GOOS == "linux" {
+	case "linux":
 		if _, err := os.Stat(filepath.Join(mountPoint, "root")); !os.IsNotExist(err) {
 			return mountPoint, true, nil
 		}
@@ -538,7 +670,8 @@ func MountDMG(image string) (string, bool, error) {
 
 // Unmount unmounts a DMG with hdiutil
 func Unmount(mountPoint string, force bool) error {
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		var cmd *exec.Cmd
 
 		if force {
@@ -562,11 +695,15 @@ func Unmount(mountPoint string, force bool) error {
 			}
 			return fmt.Errorf("failed to unmount %s: %v%s", mountPoint, err, edetail)
 		}
-	} else if runtime.GOOS == "linux" {
+	case "linux":
+		// First unmount the filesystem
 		cmd := exec.Command("umount", mountPoint)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to unmount %s: %v", mountPoint, err)
 		}
+
+		// Note: Loop devices created for HFS+ mounting are automatically cleaned up
+		// by the kernel when the filesystem is unmounted, so no explicit cleanup needed
 	}
 
 	return nil
@@ -681,17 +818,22 @@ func ExtractFromDMG(ipswPath, dmgPath, destPath, pemDB string, pattern *regexp.R
 			return nil // keep going
 		}
 		if info.IsDir() {
-			return nil
+			return nil // skip directories
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil // skip symlinks
 		}
 		if pattern.MatchString(strings.TrimPrefix(path, mountPoint)) {
 			fname := strings.TrimPrefix(path, mountPoint)
 			fname = filepath.Join(destPath, fname)
-			if err := os.MkdirAll(filepath.Dir(fname), 0750); err != nil {
+			if err := os.MkdirAll(filepath.Dir(fname), 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %v", filepath.Join(destPath, filepath.Dir(fname)), err)
 			}
-			Indent(log.Info, 3)(fmt.Sprintf("Extracting to %s", fname))
+			Indent(log.Debug, 3)(fmt.Sprintf("Extracting to %s", fname))
 			if err := Copy(path, fname); err != nil {
-				return fmt.Errorf("failed to extract %s: %v", fname, err)
+				// return fmt.Errorf("failed to extract %s: %v", fname, err)
+				log.WithError(err).Errorf("failed to copy %s to %s", path, fname)
+				return nil // keep going
 			}
 			artifacts = append(artifacts, fname)
 		}

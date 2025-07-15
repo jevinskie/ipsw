@@ -11,7 +11,27 @@ description: Download PCC VM files
 Download PCC VM files
 
 ```
-ipsw download pcc [flags]
+ipsw download pcc [INDEX] [flags]
+```
+
+### Examples
+
+```bash
+# Show available PCC releases info
+❯ ipsw download pcc --info
+
+# Show info for specific PCC release by index
+❯ ipsw download pcc 42 --info
+
+# Download specific PCC release by index
+❯ ipsw download pcc 42
+
+# Download PCC VM files interactively
+❯ ipsw download pcc
+
+# Download to specific directory
+❯ ipsw download pcc --output ./pcc-vms
+
 ```
 
 ### Options
@@ -19,29 +39,21 @@ ipsw download pcc [flags]
 ```
   -h, --help            help for pcc
   -i, --info            Show PCC Release info
+      --insecure        do not verify ssl certs
   -o, --output string   Output directory to save files to
+      --proxy string    HTTP/HTTPS proxy
+      --restart-all     always restart resumable IPSWs
+      --resume-all      always resume resumable IPSWs
+      --skip-all        always skip resumable IPSWs
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --black-list stringArray   iOS device black list
-  -b, --build string             iOS BuildID (i.e. 16F203)
-      --color                    colorize output
-      --config string            config file (default is $HOME/.config/ipsw/config.yaml)
-  -y, --confirm                  do not prompt user for confirmation
-  -d, --device string            iOS Device (i.e. iPhone11,2)
-      --insecure                 do not verify ssl certs
-  -m, --model string             iOS Model (i.e. D321AP)
-      --no-color                 disable colorize output
-      --proxy string             HTTP/HTTPS proxy
-  -_, --remove-commas            replace commas in IPSW filename with underscores
-      --restart-all              always restart resumable IPSWs
-      --resume-all               always resume resumable IPSWs
-      --skip-all                 always skip resumable IPSWs
-  -V, --verbose                  verbose output
-  -v, --version string           iOS Version (i.e. 12.3.1)
-      --white-list stringArray   iOS device white list
+      --color           colorize output
+      --config string   config file (default is $HOME/.config/ipsw/config.yaml)
+      --no-color        disable colorize output
+  -V, --verbose         verbose output
 ```
 
 ### SEE ALSO

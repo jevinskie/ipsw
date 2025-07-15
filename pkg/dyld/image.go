@@ -121,6 +121,7 @@ type astate struct {
 	Starts   bool
 	ObjC     bool
 	Slide    bool
+	Swift    bool
 }
 
 func (a *astate) SetDeps(done bool) {
@@ -223,6 +224,18 @@ func (a *astate) IsSlideInfoDone() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.Slide
+}
+
+func (a *astate) SetSwift(done bool) {
+	a.mu.Lock()
+	a.Swift = done
+	a.mu.Unlock()
+}
+
+func (a *astate) IsSwiftDone() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Swift
 }
 
 type analysis struct {
@@ -338,14 +351,17 @@ func (i *CacheImage) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (i *CacheImage) ReadAt(p []byte, off int64) (n int, err error) {
-	if i.m == nil {
-		i.m, err = i.GetPartialMacho()
+	if i.pm == nil {
+		i.pm, err = i.GetPartialMacho()
 		if err != nil {
 			return -1, err
 		}
 	}
-	i.ruuid, _, err = i.cache.GetOffset(i.m.Segment("__LINKEDIT").Addr)
-	// i.ruuid, offset, err = i.cache.GetOffset(addr)
+	if i.pm.Segment("__LINKEDIT") != nil {
+		i.ruuid, _, err = i.cache.GetOffset(i.pm.Segment("__LINKEDIT").Addr)
+	} else {
+		return -1, fmt.Errorf("failed to get __LINKEDIT segment")
+	}
 	if err != nil {
 		return -1, err
 	}
@@ -486,6 +502,7 @@ func (i *CacheImage) GetPartialMacho() (*macho.File, error) {
 	}
 	i.pm, err = macho.NewFile(io.NewSectionReader(i.cache.r[i.cuuid], int64(offset), int64(i.TextSegmentSize)), macho.FileConfig{
 		LoadIncluding: []types.LoadCmd{
+			types.LC_SEGMENT,
 			types.LC_SEGMENT_64,
 			types.LC_DYLD_INFO,
 			types.LC_DYLD_INFO_ONLY,
@@ -515,6 +532,11 @@ func (i *CacheImage) GetPartialMacho() (*macho.File, error) {
 // Analyze analyzes an image by parsing it's symbols, stubs and GOT
 func (i *CacheImage) Analyze() error {
 
+	if err := i.ParseObjC(); err != nil {
+		log.Errorf("failed to parse objc data for image %s: %v", filepath.Base(i.Name), err)
+		// return fmt.Errorf("failed to parse objc data for image %s: %v", filepath.Base(i.Name), err) FIXME: should this error out?
+	}
+
 	if err := i.ParsePublicSymbols(false); err != nil {
 		log.Errorf("failed to parse exported symbols for %s: %w", i.Name, err)
 	}
@@ -525,13 +547,18 @@ func (i *CacheImage) Analyze() error {
 		}
 	}
 
-	if err := i.ParseObjC(); err != nil {
-		log.Errorf("failed to parse objc data for image %s: %v", filepath.Base(i.Name), err)
-		// return fmt.Errorf("failed to parse objc data for image %s: %v", filepath.Base(i.Name), err) FIXME: should this error out?
-	}
-
 	if !i.cache.IsArm64() {
 		utils.Indent(log.Warn, 2)("image analysis of stubs and GOT only works on arm64 architectures")
+	}
+
+	if !i.Analysis.State.IsSwiftDone() {
+		// TODO: add more swift runtime metadata
+		if i.cache.IsArm64() {
+			if err := i.ParseSwiftStrings(); err != nil {
+				return fmt.Errorf("failed to parse swift strings for %s: %w", i.Name, err)
+			}
+		}
+		i.Analysis.State.SetSwift(true)
 	}
 
 	if !i.Analysis.State.IsSlideInfoDone() {
@@ -738,15 +765,32 @@ func (i *CacheImage) ParseObjC() error {
 // ParseGOT parse global offset table in MachO
 func (i *CacheImage) ParseGOT() error {
 
+	i.Analysis.GotPointers = make(map[uint64]uint64)
+
 	m, err := i.GetPartialMacho()
 	if err != nil {
 		return fmt.Errorf("failed to get MachO for image %s; %v", i.Name, err)
 	}
 	defer m.Close()
 
-	i.Analysis.GotPointers, err = disass.ParseGotPtrs(m)
-	if err != nil {
-		return err
+	for _, secName := range []string{"__got", "__auth_got", "__auth_ptr"} {
+		for _, sec := range m.Sections {
+			if (sec.Seg == "__AUTH_CONST" || sec.Seg == "__DATA_CONST") && sec.Name == secName {
+				dat := make([]byte, sec.Size)
+				if _, err := i.ReadAtAddr(dat, sec.Addr); err != nil {
+					return fmt.Errorf("failed to read GOT section %s: %v", secName, err)
+				}
+				ptrs := make([]uint64, sec.Size/8)
+				if err := binary.Read(bytes.NewReader(dat), binary.LittleEndian, &ptrs); err != nil {
+					return fmt.Errorf("failed to read %s.%s got pointers; %v", sec.Seg, sec.Name, err)
+				}
+				for idx, ptr := range ptrs {
+					if ptr != 0 {
+						i.Analysis.GotPointers[sec.Addr+uint64(idx*8)] = i.cache.SlideInfo.SlidePointer(ptr)
+					}
+				}
+			}
+		}
 	}
 
 	i.Analysis.State.SetGot(true)
@@ -804,6 +848,42 @@ func (i *CacheImage) ParseHelpers() error {
 	return nil
 }
 
+func (i *CacheImage) ParseSwiftStrings() error {
+
+	m, err := i.GetPartialMacho()
+	if err != nil {
+		return fmt.Errorf("failed to get MachO for image %s; %v", i.Name, err)
+	}
+
+	text := m.Section("__TEXT", "__text")
+	if text == nil {
+		return fmt.Errorf("no __TEXT.__text section found")
+	}
+
+	data, err := text.Data()
+	if err != nil {
+		return fmt.Errorf("failed to get __TEXT.__text data: %v", err)
+	}
+
+	engine := disass.NewMachoDisass(m, &disass.Config{
+		Data:         data,
+		StartAddress: text.Addr,
+		Middle:       text.Addr + text.Size,
+	})
+
+	strs, err := engine.FindSwiftStrings()
+	if err != nil {
+		return fmt.Errorf("failed to find swift strings: %v", err)
+	}
+	for addr, str := range strs {
+		if len(str) > 0 {
+			i.cache.AddressToSymbol[addr] = fmt.Sprintf("%v", str)
+		}
+	}
+
+	return nil
+}
+
 // ParseLocalSymbols parses and caches, with the option to dump, all the local/private symbols for an image
 func (i *CacheImage) ParseLocalSymbols(dump bool) error {
 
@@ -836,7 +916,7 @@ func (i *CacheImage) ParseLocalSymbols(dump bool) error {
 				continue
 			}
 
-			for e := 0; e < int(i.cache.Images[idx].NlistCount); e++ {
+			for range int(i.cache.Images[idx].NlistCount) {
 				nlist := types.Nlist64{}
 				if err := binary.Read(sr, i.cache.ByteOrder, &nlist); err != nil {
 					return err

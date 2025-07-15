@@ -32,7 +32,7 @@ func init() {
 // ASProfileCmd represents the appstore profile command
 var ASProfileCmd = &cobra.Command{
 	Use:     "profile",
-	Aliases: []string{"p"},
+	Aliases: []string{"prof"},
 	Short:   "Create, delete, and download provisioning profiles that enable app installations for development and distribution",
 	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {

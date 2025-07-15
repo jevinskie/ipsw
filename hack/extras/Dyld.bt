@@ -124,7 +124,8 @@ typedef struct
     uint simulator : 1;                   // for simulator of specified platform
     uint locallyBuiltCache : 1;           // 0 for B&I built cache, 1 for locally built cache
     uint builtFromChainedFixups : 1;      // some dylib in cache was built using chained fixups, so patch tables must be used for overrides
-    uint padding : 20;                    // TBD
+    uint newFormatTLVs          : 1;      // TLVs have been set by cache builder as new format (not needing runtime side table)
+    uint padding : 19;                    // TBD
     uint64 sharedRegionStart;             // base load address of cache if not slid
     uint64 sharedRegionSize;              // overall size of region cache can be mapped into
     uint64 maxSlide<format = hex>;        // runtime slide of cache can be between zero and this value
@@ -168,6 +169,10 @@ typedef struct
     uint64 dynamicDataMaxSize;   // maximum size of space reserved from dynamic dataz
     uint32 tProMappingOffset;    // file offset to first dyld_cache_tpro_mapping_info
     uint32 tProMappingCount;     // number of dyld_cache_tpro_mapping_info entries
+    uint64    functionVariantInfoAddr;// (unslid) address of dyld_cache_function_variant_info
+    uint64    functionVariantInfoSize;// Size of all of the variant information pointed to via the dyld_cache_function_variant_info
+    uint64    prewarmingDataOffset;   // file offset to dyld_prewarming_header
+    uint64    prewarmingDataSize;     // byte size of prewarming data
 } dyld_cache_header;
 
 typedef struct

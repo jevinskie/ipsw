@@ -41,14 +41,51 @@ func (s *Sqlite) Connect() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to connect sqlite database: %w", err)
 	}
-	return s.db.AutoMigrate(
+
+	// Apply sql.js-httpvfs optimizations for better performance with HTTP_RANGE requests
+	// These settings optimize the database for use with sql.js-httpvfs web interface.
+	// See: https://github.com/phiresky/sql.js-httpvfs for more details on these optimizations
+	if sqlDB, err := s.db.DB(); err == nil {
+		// Set page size to 1024 bytes - optimal for HTTP_RANGE requests
+		if _, err := sqlDB.Exec("PRAGMA page_size = 1024"); err != nil {
+			return fmt.Errorf("failed to set page_size pragma: %w", err)
+		}
+		
+		// Use DELETE journal mode - more compatible with HTTP_RANGE than WAL
+		if _, err := sqlDB.Exec("PRAGMA journal_mode = DELETE"); err != nil {
+			return fmt.Errorf("failed to set journal_mode pragma: %w", err)
+		}
+		
+		// Additional optimization: synchronous=NORMAL for better performance while maintaining data integrity
+		if _, err := sqlDB.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+			return fmt.Errorf("failed to set synchronous pragma: %w", err)
+		}
+	}
+
+	if err := s.db.AutoMigrate(
 		&model.Ipsw{},
 		&model.Device{},
 		&model.Kernelcache{},
 		&model.DyldSharedCache{},
 		&model.Macho{},
 		&model.Symbol{},
-	)
+		&model.EntitlementKey{},
+		&model.EntitlementValue{},
+		&model.Entitlement{},
+	); err != nil {
+		return err
+	}
+
+	// Execute VACUUM after migrations to ensure optimal page layout and compact the database.
+	// This is especially important for sql.js-httpvfs performance as it reduces the database
+	// file size and improves HTTP_RANGE request efficiency
+	if sqlDB, err := s.db.DB(); err == nil {
+		if _, err := sqlDB.Exec("VACUUM"); err != nil {
+			return fmt.Errorf("failed to execute VACUUM: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Create creates a new entry in the database.
@@ -86,7 +123,7 @@ func (s *Sqlite) GetIPSW(version, build, device string) (*model.Ipsw, error) {
 	var ipsw model.Ipsw
 	if err := s.db.Joins("JOIN ipsw_devices ON ipsw_devices.ipsw_id = ipsws.id").
 		Joins("JOIN devices ON devices.name = ipsw_devices.device_name").
-		Where("ipsws.version = ? AND ipsws.build_id = ? AND devices.name = ?", version, build, device).
+		Where("ipsws.version = ? AND ipsws.buildid = ? AND devices.name = ?", version, build, device).
 		First(&ipsw).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, model.ErrNotFound
@@ -160,6 +197,8 @@ func (s *Sqlite) GetSymbols(uuid string) ([]*model.Symbol, error) {
 	return syms, nil
 }
 
+
+
 // Set sets the value for the given key.
 // It overwrites any previous value for that key.
 func (s *Sqlite) Save(value any) error {
@@ -184,4 +223,9 @@ func (s *Sqlite) Close() error {
 		return err
 	}
 	return db.Close()
+}
+
+// GetDB returns the underlying GORM database instance
+func (s *Sqlite) GetDB() *gorm.DB {
+	return s.db
 }

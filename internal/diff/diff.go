@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,8 +28,11 @@ import (
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/aea"
 	"github.com/blacktop/ipsw/pkg/dyld"
+	"github.com/blacktop/ipsw/pkg/iboot"
+	"github.com/blacktop/ipsw/pkg/img4"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/blacktop/ipsw/pkg/kernelcache"
+	"github.com/blacktop/ipsw/pkg/signature"
 	"golang.org/x/exp/maps"
 )
 
@@ -50,19 +54,36 @@ type PlistDiff struct {
 	Updated map[string]string `json:"changed,omitempty"`
 }
 
+type FileDiff struct {
+	New     map[string][]string `json:"new,omitempty"`
+	Removed map[string][]string `json:"removed,omitempty"`
+	// Updated map[string]string `json:"changed,omitempty"`
+}
+
+type IBootDiff struct {
+	Versions []string            `json:"versions,omitempty"`
+	New      map[string][]string `json:"new,omitempty"`
+	Removed  map[string][]string `json:"removed,omitempty"`
+}
+
 type Config struct {
-	Title     string
-	IpswOld   string
-	IpswNew   string
-	KDKs      []string
-	LaunchD   bool
-	Firmware  bool
-	Features  bool
-	CStrings  bool
-	AllowList []string
-	BlockList []string
-	PemDB     string
-	Output    string
+	Title        string
+	IpswOld      string
+	IpswNew      string
+	KDKs         []string
+	LaunchD      bool
+	Firmware     bool
+	Features     bool
+	Files        bool
+	CStrings     bool
+	FuncStarts   bool
+	Entitlements bool
+	AllowList    []string
+	BlockList    []string
+	PemDB        string
+	Signatures   string
+	Output       string
+	Verbose      bool
 }
 
 // Context is the context for the diff
@@ -99,11 +120,12 @@ type Diff struct {
 	Dylibs    *mcmd.MachoDiff `json:"dylibs,omitempty"`
 	Machos    *mcmd.MachoDiff `json:"machos,omitempty"`
 	Firmwares *mcmd.MachoDiff `json:"firmwares,omitempty"`
+	IBoot     *IBootDiff      `json:"iboot,omitempty"`
 	Launchd   string          `json:"launchd,omitempty"`
 	Features  *PlistDiff      `json:"features,omitempty"`
-
-	tmpDir string `json:"-"`
-	conf   *Config
+	Files     *FileDiff       `json:"files,omitempty"`
+	tmpDir    string          `json:"-"`
+	conf      *Config
 }
 
 // New news the diff
@@ -237,13 +259,13 @@ func (d *Diff) Diff() (err error) {
 
 	log.Info("Diffing KERNELCACHES")
 	if err := d.parseKernelcache(); err != nil {
-		return err
+		log.WithError(err).Error("failed to parse kernelcaches")
 	}
 
 	if d.Old.KDK != "" && d.New.KDK != "" {
 		log.Info("Diffing KDKS")
 		if err := d.parseKDKs(); err != nil {
-			return err
+			log.WithError(err).Error("failed to parse KDKs")
 		}
 	}
 
@@ -254,39 +276,52 @@ func (d *Diff) Diff() (err error) {
 	defer d.unmountSystemOsDMGs()
 
 	if err := d.parseDSC(); err != nil {
-		return err
+		log.WithError(err).Error("failed to parse DSCs")
 	}
 
 	log.Info("Diffing MachOs")
 	if err := d.parseMachos(); err != nil {
-		return fmt.Errorf("failed to parse MachOs: %v", err)
+		log.WithError(err).Error("failed to parse MachOs")
 	}
 
 	if d.conf.LaunchD {
 		log.Info("Diffing launchd PLIST")
 		if err := d.parseLaunchdPlists(); err != nil {
-			return fmt.Errorf("failed to parse launchd config plists: %v", err)
+			log.WithError(err).Error("failed to parse launchd plists")
 		}
 	}
 
 	if d.conf.Firmware {
 		log.Info("Diffing Firmware")
 		if err := d.parseFirmwares(); err != nil {
-			return err
+			log.WithError(err).Error("failed to parse firmwares")
+		}
+		log.Info("Diffing iBoot")
+		if err := d.parseIBoot(); err != nil {
+			log.WithError(err).Error("failed to parse iBoot")
 		}
 	}
 
 	if d.conf.Features {
 		log.Info("Diffing Feature Flags")
 		if err := d.parseFeatureFlags(); err != nil {
-			return err
+			log.WithError(err).Error("failed to parse feature flags")
 		}
 	}
 
-	log.Info("Diffing ENTITLEMENTS")
-	d.Ents, err = d.parseEntitlements()
-	if err != nil {
-		return err
+	if d.conf.Files {
+		log.Info("Diffing Files")
+		if err := d.parseFiles(); err != nil {
+			log.WithError(err).Error("failed to parse files")
+		}
+	}
+
+	if d.conf.Entitlements {
+		log.Info("Diffing ENTITLEMENTS")
+		d.Ents, err = d.parseEntitlements()
+		if err != nil {
+			log.WithError(err).Error("failed to parse entitlements")
+		}
 	}
 
 	return nil
@@ -437,13 +472,38 @@ func (d *Diff) parseKernelcache() error {
 	}
 	defer m2.Close()
 
+	var smap map[string]signature.SymbolMap
+	if d.conf.Signatures != "" {
+		smap = make(map[string]signature.SymbolMap)
+		log.Info("Parsing Kernel Signatures")
+		sigs, err := signature.Parse(d.conf.Signatures)
+		if err != nil {
+			return fmt.Errorf("failed to parse signatures: %v", err)
+		}
+
+		smap[m1.UUID().String()] = signature.NewSymbolMap()
+		log.WithField("kernelcache", d.Old.Kernel.Path).Info("Symbolicating...")
+		if err := smap[m1.UUID().String()].Symbolicate(d.Old.Kernel.Path, sigs, true); err != nil {
+			log.Errorf("failed to symbolicate kernelcache: %v", err)
+		}
+
+		smap[m2.UUID().String()] = signature.NewSymbolMap()
+		log.WithField("kernelcache", d.New.Kernel.Path).Info("Symbolicating...")
+		if err := smap[m2.UUID().String()].Symbolicate(d.New.Kernel.Path, sigs, true); err != nil {
+			log.Errorf("failed to symbolicate kernelcache: %v", err)
+		}
+	}
+
 	d.Kexts, err = kcmd.Diff(m1, m2, &mcmd.DiffConfig{
-		Markdown:  true,
-		Color:     false,
-		DiffTool:  "git",
-		AllowList: d.conf.AllowList,
-		BlockList: d.conf.BlockList,
-		CStrings:  d.conf.CStrings,
+		Markdown:   true,
+		Color:      false,
+		DiffTool:   "git",
+		AllowList:  d.conf.AllowList,
+		BlockList:  d.conf.BlockList,
+		CStrings:   d.conf.CStrings,
+		FuncStarts: d.conf.FuncStarts,
+		SymMap:     smap,
+		Verbose:    d.conf.Verbose,
 	})
 	if err != nil {
 		return err
@@ -553,21 +613,23 @@ func (d *Diff) parseDSC() error {
 
 	d.Old.Webkit, err = dcmd.GetWebkitVersion(dscOLD)
 	if err != nil {
-		return fmt.Errorf("failed to get WebKit version: %v", err)
+		log.WithError(err).Error("failed to get WebKit version from 'old' DSC")
 	}
 
 	d.New.Webkit, err = dcmd.GetWebkitVersion(dscNEW)
 	if err != nil {
-		return fmt.Errorf("failed to get WebKit version: %v", err)
+		log.WithError(err).Error("failed to get WebKit version from 'new' DSC")
 	}
 
 	d.Dylibs, err = dcmd.Diff(dscOLD, dscNEW, &mcmd.DiffConfig{
-		Markdown:  true,
-		Color:     false,
-		DiffTool:  "git",
-		AllowList: d.conf.AllowList,
-		BlockList: d.conf.BlockList,
-		CStrings:  d.conf.CStrings,
+		Markdown:   true,
+		Color:      false,
+		DiffTool:   "git",
+		AllowList:  d.conf.AllowList,
+		BlockList:  d.conf.BlockList,
+		CStrings:   d.conf.CStrings,
+		FuncStarts: d.conf.FuncStarts,
+		Verbose:    d.conf.Verbose,
 	})
 	if err != nil {
 		return err
@@ -596,12 +658,14 @@ func (d *Diff) parseEntitlements() (string, error) {
 
 func (d *Diff) parseMachos() (err error) {
 	d.Machos, err = mcmd.DiffIPSW(d.Old.IPSWPath, d.New.IPSWPath, &mcmd.DiffConfig{
-		Markdown:  true,
-		Color:     false,
-		DiffTool:  "git",
-		AllowList: d.conf.AllowList,
-		BlockList: d.conf.BlockList,
-		CStrings:  d.conf.CStrings,
+		Markdown:   true,
+		Color:      false,
+		DiffTool:   "git",
+		AllowList:  d.conf.AllowList,
+		BlockList:  d.conf.BlockList,
+		CStrings:   d.conf.CStrings,
+		FuncStarts: d.conf.FuncStarts,
+		Verbose:    d.conf.Verbose,
 	})
 	return
 }
@@ -631,14 +695,94 @@ func (d *Diff) parseLaunchdPlists() error {
 
 func (d *Diff) parseFirmwares() (err error) {
 	d.Firmwares, err = mcmd.DiffFirmwares(d.Old.IPSWPath, d.New.IPSWPath, &mcmd.DiffConfig{
-		Markdown:  true,
-		Color:     false,
-		DiffTool:  "git",
-		AllowList: d.conf.AllowList,
-		BlockList: d.conf.BlockList,
-		CStrings:  d.conf.CStrings,
+		Markdown:   true,
+		Color:      false,
+		DiffTool:   "git",
+		AllowList:  d.conf.AllowList,
+		BlockList:  d.conf.BlockList,
+		CStrings:   d.conf.CStrings,
+		FuncStarts: d.conf.FuncStarts,
+		Verbose:    d.conf.Verbose,
 	})
 	return
+}
+
+func (d *Diff) parseIBoot() (err error) {
+	d.IBoot = &IBootDiff{
+		New:     make(map[string][]string),
+		Removed: make(map[string][]string),
+	}
+	tmpDIR, err := os.MkdirTemp("", "ipsw_extract_iboot")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory to store im4ps: %v", err)
+	}
+	defer os.RemoveAll(tmpDIR)
+	getIboot := func(ipswPath string) (*iboot.IBoot, error) {
+		iBootIm4ps, err := utils.Unzip(ipswPath, tmpDIR, func(f *zip.File) bool {
+			// return regexp.MustCompile(`iBSS.*\.im4p$`).MatchString(f.Name) || regexp.MustCompile(`iBoot\..*\.im4p$`).MatchString(f.Name)
+			return regexp.MustCompile(`iBoot\..*\.im4p$`).MatchString(f.Name)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to unzip iBoot im4p: %v", err)
+		}
+		im4p, err := img4.OpenPayload(iBootIm4ps[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to open im4p: %v", err)
+		}
+		return iboot.Parse(im4p.Data)
+	}
+	oldIBoot, err := getIboot(d.Old.IPSWPath)
+	if err != nil {
+		return fmt.Errorf("failed to get iBoot from 'Old' IPSW: %v", err)
+	}
+	newIBoot, err := getIboot(d.New.IPSWPath)
+	if err != nil {
+		return fmt.Errorf("failed to get iBoot from 'New' IPSW: %v", err)
+	}
+	d.IBoot.Versions = []string{oldIBoot.Version, newIBoot.Version}
+	for name, strs := range newIBoot.Strings {
+		if _, ok := oldIBoot.Strings[name]; ok {
+			for _, str := range strs {
+				if len(str) < 10 {
+					continue
+				}
+				found := false
+				for _, oldStr := range oldIBoot.Strings[name] {
+					if str == oldStr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					d.IBoot.New[name] = append(d.IBoot.New[name], str)
+				}
+			}
+		} else {
+			for _, str := range strs {
+				d.IBoot.New[name] = append(d.IBoot.New[name], str)
+			}
+		}
+	}
+	for name, strs := range oldIBoot.Strings {
+		if _, ok := newIBoot.Strings[name]; ok {
+			for _, str := range strs {
+				if len(str) < 10 {
+					continue
+				}
+				found := false
+				for _, newStr := range newIBoot.Strings[name] {
+					if str == newStr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					d.IBoot.Removed[name] = append(d.IBoot.Removed[name], str)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (d *Diff) parseFeatureFlags() (err error) {
@@ -714,6 +858,44 @@ func (d *Diff) parseFeatureFlags() (err error) {
 				d.Features.Updated[f2] = out
 			}
 		}
+	}
+
+	return nil
+}
+
+func (d *Diff) parseFiles() error {
+	d.Files = &FileDiff{
+		New:     make(map[string][]string),
+		Removed: make(map[string][]string),
+	}
+
+	/* PREVIOUS IPSW */
+
+	prev := make(map[string][]string)
+
+	if err := search.ForEachFileInIPSW(d.Old.IPSWPath, "", d.conf.PemDB, func(dmg, path string) error {
+		prev[dmg] = append(prev[dmg], path)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	/* NEXT IPSW */
+
+	next := make(map[string][]string)
+
+	if err := search.ForEachFileInIPSW(d.New.IPSWPath, "", d.conf.PemDB, func(dmg, path string) error {
+		next[dmg] = append(next[dmg], path)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	for dmg := range prev {
+		d.Files.New[dmg] = utils.Difference(next[dmg], prev[dmg])
+		d.Files.Removed[dmg] = utils.Difference(prev[dmg], next[dmg])
+		sort.Strings(d.Files.New[dmg])
+		sort.Strings(d.Files.Removed[dmg])
 	}
 
 	return nil

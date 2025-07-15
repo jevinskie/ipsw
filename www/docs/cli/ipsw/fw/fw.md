@@ -33,6 +33,13 @@ ipsw fw [flags]
 
 * [ipsw](/docs/cli/ipsw)	 - Download and Parse IPSWs (and SO much more)
 * [ipsw fw aea](/docs/cli/ipsw/fw/aea)	 - Parse AEA1 DMGs
-* [ipsw fw iboot](/docs/cli/ipsw/fw/iboot)	 - Dump firmwares
+* [ipsw fw aop](/docs/cli/ipsw/fw/aop)	 - Dump MachOs
+* [ipsw fw c1](/docs/cli/ipsw/fw/c1)	 - Dump C1 Baseband Firmware
+* [ipsw fw cam](/docs/cli/ipsw/fw/cam)	 - Dump MachOs
+* [ipsw fw dcp](/docs/cli/ipsw/fw/dcp)	 - Dump MachOs
+* [ipsw fw exclave](/docs/cli/ipsw/fw/exclave)	 - Dump MachOs
+* [ipsw fw gpu](/docs/cli/ipsw/fw/gpu)	 - Dump MachOs
+* [ipsw fw iboot](/docs/cli/ipsw/fw/iboot)	 - Dump iBoot files
+* [ipsw fw ibootim](/docs/cli/ipsw/fw/ibootim)	 - Dump iBoot Images
 * [ipsw fw tc](/docs/cli/ipsw/fw/tc)	 - Dump TrustCache
 

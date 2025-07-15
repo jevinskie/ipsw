@@ -34,6 +34,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/caarlos0/ctrlc"
 	"github.com/fatih/color"
@@ -44,51 +45,83 @@ import (
 )
 
 func init() {
-	devCmd.Flags().StringArrayP("watch", "w", []string{}, "Developer portal group pattern to watch (i.e. '^iOS.*beta$')")
-	devCmd.Flags().Bool("os", false, "Download '*OS' OSes/Apps")
-	devCmd.Flags().Bool("profile", false, "Download Logging Profiles")
-	devCmd.Flags().Bool("more", false, "Download 'More' OSes/Apps")
-	devCmd.Flags().IntP("page", "p", 20, "Page size for file lists")
-	devCmd.Flags().Bool("sms", false, "Prefer SMS Two-factor authentication")
-	devCmd.Flags().Bool("json", false, "Output downloadable items as JSON")
-	devCmd.Flags().Bool("pretty", false, "Pretty print JSON")
-	devCmd.Flags().Bool("kdk", false, "Download KDK")
-	devCmd.Flags().DurationP("timeout", "t", 5*time.Minute, "Timeout for watch attempts in minutes")
-	devCmd.Flags().StringP("output", "o", "", "Folder to download files to")
-	devCmd.Flags().StringP("vault-password", "k", "", "Password to unlock credential vault (only for file vaults)")
-	viper.BindPFlag("download.dev.watch", devCmd.Flags().Lookup("watch"))
-	viper.BindPFlag("download.dev.os", devCmd.Flags().Lookup("os"))
-	viper.BindPFlag("download.dev.profile", devCmd.Flags().Lookup("profile"))
-	viper.BindPFlag("download.dev.more", devCmd.Flags().Lookup("more"))
-	viper.BindPFlag("download.dev.page", devCmd.Flags().Lookup("page"))
-	viper.BindPFlag("download.dev.sms", devCmd.Flags().Lookup("sms"))
-	viper.BindPFlag("download.dev.json", devCmd.Flags().Lookup("json"))
-	viper.BindPFlag("download.dev.pretty", devCmd.Flags().Lookup("pretty"))
-	viper.BindPFlag("download.dev.kdk", devCmd.Flags().Lookup("kdk"))
-	viper.BindPFlag("download.dev.timeout", devCmd.Flags().Lookup("timeout"))
-	viper.BindPFlag("download.dev.output", devCmd.Flags().Lookup("output"))
-	viper.BindPFlag("download.dev.vault-password", devCmd.Flags().Lookup("vault-password"))
-	devCmd.Flags().MarkHidden("kdk")
-	devCmd.MarkFlagDirname("output")
-	devCmd.MarkFlagsMutuallyExclusive("os", "profile", "more", "kdk")
-	devCmd.SetHelpFunc(func(c *cobra.Command, s []string) {
-		DownloadCmd.PersistentFlags().MarkHidden("white-list")
-		DownloadCmd.PersistentFlags().MarkHidden("black-list")
-		DownloadCmd.PersistentFlags().MarkHidden("device")
-		DownloadCmd.PersistentFlags().MarkHidden("model")
-		DownloadCmd.PersistentFlags().MarkHidden("version")
-		DownloadCmd.PersistentFlags().MarkHidden("build")
-		c.Parent().HelpFunc()(c, s)
-	})
-	DownloadCmd.AddCommand(devCmd)
+	DownloadCmd.AddCommand(downloadDevCmd)
+	// Download behavior flags
+	downloadDevCmd.Flags().String("proxy", "", "HTTP/HTTPS proxy")
+	downloadDevCmd.Flags().Bool("insecure", false, "do not verify ssl certs")
+	downloadDevCmd.Flags().Bool("skip-all", false, "always skip resumable IPSWs")
+	downloadDevCmd.Flags().Bool("resume-all", false, "always resume resumable IPSWs")
+	downloadDevCmd.Flags().Bool("restart-all", false, "always restart resumable IPSWs")
+	downloadDevCmd.Flags().BoolP("remove-commas", "_", false, "replace commas in IPSW filename with underscores")
+	// Auth flags
+	downloadDevCmd.Flags().StringP("username", "u", "", "Apple Developer Portal username")
+	downloadDevCmd.Flags().StringP("password", "p", "", "Apple Developer Portal password")
+	downloadDevCmd.Flags().StringP("vault-password", "k", "", "Password to unlock credential vault (only for file vaults)")
+	// Filter flags
+	downloadDevCmd.Flags().StringP("version", "v", "", "iOS Version (i.e. 12.3.1)")
+	downloadDevCmd.Flags().StringP("build", "b", "", "iOS BuildID (i.e. 16F203)")
+	// Command-specific flags
+	downloadDevCmd.Flags().StringArrayP("watch", "w", []string{}, "Developer portal group pattern to watch (i.e. '^iOS.*beta$')")
+	downloadDevCmd.Flags().Bool("os", false, "Download '*OS' OSes/Apps")
+	downloadDevCmd.Flags().Bool("profile", false, "Download Logging Profiles")
+	downloadDevCmd.Flags().Bool("more", false, "Download 'More' OSes/Apps")
+	downloadDevCmd.Flags().Bool("kdk", false, "Download KDK")
+	downloadDevCmd.Flags().MarkHidden("kdk")
+	downloadDevCmd.MarkFlagsMutuallyExclusive("os", "profile", "more", "kdk")
+	downloadDevCmd.Flags().Int("page", 20, "Page size for file lists")
+	downloadDevCmd.Flags().Bool("sms", false, "Prefer SMS Two-factor authentication")
+	downloadDevCmd.Flags().Bool("json", false, "Output downloadable items as JSON")
+	downloadDevCmd.Flags().Bool("pretty", false, "Pretty print JSON")
+	downloadDevCmd.Flags().DurationP("timeout", "t", 5*time.Minute, "Timeout for watch attempts in minutes")
+	downloadDevCmd.Flags().StringP("output", "o", "", "Folder to download files to")
+	downloadDevCmd.MarkFlagDirname("output")
+	// Bind persistent flags
+	viper.BindPFlag("download.dev.proxy", downloadDevCmd.Flags().Lookup("proxy"))
+	viper.BindPFlag("download.dev.insecure", downloadDevCmd.Flags().Lookup("insecure"))
+	viper.BindPFlag("download.dev.skip-all", downloadDevCmd.Flags().Lookup("skip-all"))
+	viper.BindPFlag("download.dev.resume-all", downloadDevCmd.Flags().Lookup("resume-all"))
+	viper.BindPFlag("download.dev.restart-all", downloadDevCmd.Flags().Lookup("restart-all"))
+	viper.BindPFlag("download.dev.remove-commas", downloadDevCmd.Flags().Lookup("remove-commas"))
+	// Auth flags
+	viper.BindPFlag("download.dev.username", downloadDevCmd.Flags().Lookup("username"))
+	viper.BindPFlag("download.dev.password", downloadDevCmd.Flags().Lookup("password"))
+	viper.BindPFlag("download.dev.vault-password", downloadDevCmd.Flags().Lookup("vault-password"))
+	// Filter flags
+	viper.BindPFlag("download.dev.version", downloadDevCmd.Flags().Lookup("version"))
+	viper.BindPFlag("download.dev.build", downloadDevCmd.Flags().Lookup("build"))
+	// Bind command-specific flags
+	viper.BindPFlag("download.dev.watch", downloadDevCmd.Flags().Lookup("watch"))
+	viper.BindPFlag("download.dev.os", downloadDevCmd.Flags().Lookup("os"))
+	viper.BindPFlag("download.dev.profile", downloadDevCmd.Flags().Lookup("profile"))
+	viper.BindPFlag("download.dev.more", downloadDevCmd.Flags().Lookup("more"))
+	viper.BindPFlag("download.dev.page", downloadDevCmd.Flags().Lookup("page"))
+	viper.BindPFlag("download.dev.sms", downloadDevCmd.Flags().Lookup("sms"))
+	viper.BindPFlag("download.dev.json", downloadDevCmd.Flags().Lookup("json"))
+	viper.BindPFlag("download.dev.pretty", downloadDevCmd.Flags().Lookup("pretty"))
+	viper.BindPFlag("download.dev.kdk", downloadDevCmd.Flags().Lookup("kdk"))
+	viper.BindPFlag("download.dev.timeout", downloadDevCmd.Flags().Lookup("timeout"))
+	viper.BindPFlag("download.dev.output", downloadDevCmd.Flags().Lookup("output"))
+	viper.BindPFlag("download.dev.vault-password", downloadDevCmd.Flags().Lookup("vault-password"))
 }
 
-// devCmd represents the dev command
-var devCmd = &cobra.Command{
-	Use:           "dev",
-	Aliases:       []string{"d", "developer"},
-	Short:         "Download IPSWs (and more) from https://developer.apple.com/download",
-	SilenceUsage:  true,
+// downloadDevCmd represents the dev command
+var downloadDevCmd = &cobra.Command{
+	Use:     "dev",
+	Aliases: []string{"d", "developer"},
+	Short:   "Download IPSWs (and more) from the Apple Developer Portal",
+	Example: heredoc.Doc(`
+		# Download all available OSes interactively
+		❯ ipsw download dev --os
+
+		# Download logging profiles as JSON
+		❯ ipsw download dev --profile --json --pretty
+
+		# Watch for new releases matching pattern
+		❯ ipsw download dev --watch "^iOS.*beta$"
+
+		# Download more items (Xcode, KDKs, etc.)
+		❯ ipsw download dev --more --output ~/Downloads
+	`),
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -97,24 +130,13 @@ var devCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		viper.BindPFlag("download.proxy", cmd.Flags().Lookup("proxy"))
-		viper.BindPFlag("download.insecure", cmd.Flags().Lookup("insecure"))
-		viper.BindPFlag("download.confirm", cmd.Flags().Lookup("confirm"))
-		viper.BindPFlag("download.skip-all", cmd.Flags().Lookup("skip-all"))
-		viper.BindPFlag("download.resume-all", cmd.Flags().Lookup("resume-all"))
-		viper.BindPFlag("download.restart-all", cmd.Flags().Lookup("restart-all"))
-		viper.BindPFlag("download.remove-commas", cmd.Flags().Lookup("remove-commas"))
-		viper.BindPFlag("download.version", cmd.Flags().Lookup("version"))
-		viper.BindPFlag("download.build", cmd.Flags().Lookup("build"))
-
 		// settings
-		proxy := viper.GetString("download.proxy")
-		insecure := viper.GetBool("download.insecure")
-		// confirm := viper.GetBool("download.confirm")
-		skipAll := viper.GetBool("download.skip-all")
-		resumeAll := viper.GetBool("download.resume-all")
-		restartAll := viper.GetBool("download.restart-all")
-		removeCommas := viper.GetBool("download.remove-commas")
+		proxy := viper.GetString("download.dev.proxy")
+		insecure := viper.GetBool("download.dev.insecure")
+		skipAll := viper.GetBool("download.dev.skip-all")
+		resumeAll := viper.GetBool("download.dev.resume-all")
+		restartAll := viper.GetBool("download.dev.restart-all")
+		removeCommas := viper.GetBool("download.dev.remove-commas")
 		// flags
 		watchList := viper.GetStringSlice("download.dev.watch")
 		pageSize := viper.GetInt("download.dev.page")
@@ -122,7 +144,7 @@ var devCmd = &cobra.Command{
 		asJSON := viper.GetBool("download.dev.json")
 		prettyJSON := viper.GetBool("download.dev.pretty")
 		output := viper.GetString("download.dev.output")
-
+		// auth
 		username := viper.GetString("download.dev.username")
 		password := viper.GetString("download.dev.password")
 
@@ -155,7 +177,7 @@ var devCmd = &cobra.Command{
 		}
 
 		if viper.GetBool("download.dev.kdk") {
-			return app.DownloadKDK(viper.GetString("download.version"), viper.GetString("download.build"), output)
+			return app.DownloadKDK(viper.GetString("download.dev.version"), viper.GetString("download.dev.build"), output)
 		}
 
 		dlType := ""
@@ -168,12 +190,12 @@ var devCmd = &cobra.Command{
 		} else {
 			prompt := &survey.Select{
 				Message: "Choose a download type:",
-				Options: []string{"OSes (iOS, macOS, tvOS...)", "Profiles (Logging)", "More (XCode, KDKs...)"},
+				Options: []string{"OSes (iOS, macOS, tvOS...)", "Profiles (Logging)", "More (Xcode, KDKs...)"},
 			}
 			if err := survey.AskOne(prompt, &dlType); err != nil {
 				if err == terminal.InterruptErr {
 					log.Warn("Exiting...")
-					os.Exit(0)
+					return nil
 				}
 				return err
 			}
@@ -198,7 +220,7 @@ var devCmd = &cobra.Command{
 			}); err != nil {
 				if errors.As(err, &ctrlc.ErrorCtrlC{}) {
 					log.Warn("Exiting...")
-					os.Exit(0)
+					return nil
 				} else {
 					return fmt.Errorf("failed while watching: %v", err)
 				}

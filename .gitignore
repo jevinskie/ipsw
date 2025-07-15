@@ -21,6 +21,13 @@
 .vscode*
 debug
 __debug_*
+.env
+
+# AI
+.claude
+CLAUDE*.md
+.gemini
+GEMINI*.md
 
 # Go Work
 *.work
@@ -70,12 +77,14 @@ www/docs/static/releases*.json
 internal/commands/ida/dscu/data/dscu.py
 internal/download/data/proto
 venv/
+keybag.plist
 
 # Unicorn EMU
 unicorn2/
 
 # 🤫
 cmd/ipsw/cmd/sb/sb_cmpl.go
+cmd/ipsw/cmd/sb/sb_check.go
 cmd/ipsw/cmd/sb/sb_database.go
 cmd/ipsw/cmd/sb/sb_dec.go
 cmd/ipsw/cmd/sb/sb_opts.go

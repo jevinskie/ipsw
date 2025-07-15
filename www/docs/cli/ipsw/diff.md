@@ -32,7 +32,9 @@ ipsw diff <IPSW> <IPSW> [flags]
 ```
       --allow-list strings   Filter MachO sections to diff (e.g. __TEXT.__text)
       --block-list strings   Remove MachO sections to diff (e.g. __TEXT.__info_plist)
+      --ent                  Diff MachO entitlements
       --feat                 Diff feature flags
+      --files                Diff files
       --fw                   Diff other firmwares
   -h, --help                 help for diff
       --html                 Save diff as HTML file
@@ -42,6 +44,8 @@ ipsw diff <IPSW> <IPSW> [flags]
       --launchd              Diff launchd configs
   -m, --markdown             Save diff as Markdown file
   -o, --output string        Folder to save diff output
+  -s, --signatures string    Path to symbolicator signatures folder
+      --starts               Diff MachO function starts
       --strs                 Diff MachO cstrings
   -t, --title string         Title of the diff
 ```

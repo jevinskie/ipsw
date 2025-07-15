@@ -109,8 +109,6 @@ type subCache struct {
 	UUID string `json:"uuid"`
 	// the DSC sub-cache file extension
 	Extension string `json:"ext"`
-	// is the offset in a DSC stub island
-	InStubs bool `json:"stubs"`
 	// the DSC sub-cache mapping name
 	Mapping string `json:"mapping"`
 }
@@ -179,9 +177,6 @@ func ConvertAddressToOffset(f *dyld.File, addr uint64) (*Offset, error) {
 
 	if f.IsDyld4 {
 		o.File.SubCache.Extension, _ = f.GetSubCacheExtensionFromUUID(uuid)
-		if f.Headers[uuid].ImagesCount == 0 && f.Headers[uuid].ImagesCountOld == 0 {
-			o.File.SubCache.InStubs = true
-		}
 	}
 
 	if f.Headers[f.UUID].CacheType == dyld.CacheTypeUniversal {
@@ -204,9 +199,6 @@ func ConvertAddressToOffset(f *dyld.File, addr uint64) (*Offset, error) {
 
 		if f.IsDyld4 {
 			o.Cache.SubCache.Extension, _ = f.GetSubCacheExtensionFromUUID(uuid)
-			if f.Headers[uuid].ImagesCount == 0 && f.Headers[uuid].ImagesCountOld == 0 {
-				o.Cache.SubCache.InStubs = true
-			}
 		}
 	}
 
@@ -238,9 +230,6 @@ func ConvertOffsetToAddress(f *dyld.File, offset uint64) (*Address, error) {
 
 		if f.IsDyld4 {
 			aa.SubCache.Extension, _ = f.GetSubCacheExtensionFromUUID(uuid)
-			if f.Headers[uuid].ImagesCount == 0 && f.Headers[uuid].ImagesCountOld == 0 {
-				aa.SubCache.InStubs = true
-			}
 		}
 		a.Files = append(a.Files, aa)
 	}
@@ -265,9 +254,6 @@ func ConvertOffsetToAddress(f *dyld.File, offset uint64) (*Address, error) {
 
 		if f.IsDyld4 {
 			a.Cache.SubCache.Extension, _ = f.GetSubCacheExtensionFromUUID(uuid)
-			if f.Headers[uuid].ImagesCount == 0 && f.Headers[uuid].ImagesCountOld == 0 {
-				a.Cache.SubCache.InStubs = true
-			}
 		}
 	}
 
@@ -365,6 +351,11 @@ retry:
 	ptr, err := f.ReadPointerAtAddress(addr)
 	if err != nil {
 		return nil, err
+	}
+
+	if f.SlideInfo.SlidePointer(ptr) == 0 {
+		sym.Symbol = "?"
+		return sym, nil
 	}
 
 	utils.Indent(log.Debug, 2)(fmt.Sprintf("no symbol found (trying again with %#x as a pointer to %#x)", addr, f.SlideInfo.SlidePointer(ptr)))
@@ -774,7 +765,7 @@ func GetUserAgent(f *dyld.File, sysVer *plist.SystemVersion) (string, error) {
 }
 
 func OpenFromIPSW(ipswPath, pemDB string, driverKit, all bool) (*mount.Context, []*dyld.File, error) {
-	ctx, err := mount.DmgInIPSW(ipswPath, "sys", pemDB)
+	ctx, err := mount.DmgInIPSW(ipswPath, "sys", pemDB, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to mount IPSW: %v", err)
 	}

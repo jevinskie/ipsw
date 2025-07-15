@@ -30,6 +30,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/download"
 	"github.com/blacktop/ipsw/internal/utils"
@@ -39,30 +40,43 @@ import (
 )
 
 func init() {
-	DownloadCmd.AddCommand(xcodeCmd)
-	xcodeCmd.Flags().BoolP("latest", "l", false, "Download newest XCode")
-	xcodeCmd.Flags().BoolP("sim", "s", false, "Download Simulator Runtimes")
-
-	xcodeCmd.SetHelpFunc(func(c *cobra.Command, s []string) {
-		DownloadCmd.PersistentFlags().MarkHidden("white-list")
-		DownloadCmd.PersistentFlags().MarkHidden("black-list")
-		DownloadCmd.PersistentFlags().MarkHidden("device")
-		DownloadCmd.PersistentFlags().MarkHidden("model")
-		DownloadCmd.PersistentFlags().MarkHidden("version")
-		DownloadCmd.PersistentFlags().MarkHidden("build")
-		DownloadCmd.PersistentFlags().MarkHidden("confirm")
-		DownloadCmd.PersistentFlags().MarkHidden("remove-commas")
-		c.Parent().HelpFunc()(c, s)
-	})
+	DownloadCmd.AddCommand(downloadXcodeCmd)
+	// Download behavior flags
+	downloadXcodeCmd.Flags().String("proxy", "", "HTTP/HTTPS proxy")
+	downloadXcodeCmd.Flags().Bool("insecure", false, "do not verify ssl certs")
+	downloadXcodeCmd.Flags().Bool("skip-all", false, "always skip resumable IPSWs")
+	downloadXcodeCmd.Flags().Bool("resume-all", false, "always resume resumable IPSWs")
+	downloadXcodeCmd.Flags().Bool("restart-all", false, "always restart resumable IPSWs")
+	// Command-specific flags
+	downloadXcodeCmd.Flags().BoolP("latest", "l", false, "Download newest Xcode")
+	downloadXcodeCmd.Flags().BoolP("sim", "s", false, "Download Simulator Runtimes")
+	downloadXcodeCmd.Flags().StringP("runtime", "r", "", "Name of simulator runtime to download")
+	// Bind persistent flags
+	viper.BindPFlag("download.xcode.proxy", downloadXcodeCmd.Flags().Lookup("proxy"))
+	viper.BindPFlag("download.xcode.insecure", downloadXcodeCmd.Flags().Lookup("insecure"))
+	viper.BindPFlag("download.xcode.skip-all", downloadXcodeCmd.Flags().Lookup("skip-all"))
+	viper.BindPFlag("download.xcode.resume-all", downloadXcodeCmd.Flags().Lookup("resume-all"))
+	viper.BindPFlag("download.xcode.restart-all", downloadXcodeCmd.Flags().Lookup("restart-all"))
 }
 
-// xcodeCmd represents the xcode command
-var xcodeCmd = &cobra.Command{
-	Use:           "xcode",
-	Short:         "🚧 Download XCode 🚧",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	Hidden:        true,
+// downloadXcodeCmd represents the xcode command
+var downloadXcodeCmd = &cobra.Command{
+	Use:   "xcode",
+	Short: "🚧 Download Xcode 🚧",
+	Example: heredoc.Doc(`
+		# Download latest Xcode
+		❯ ipsw download xcode --latest
+
+		# Download Xcode interactively
+		❯ ipsw download xcode
+
+		# Download simulator runtimes
+		❯ ipsw download xcode --sim
+
+		# Download specific simulator runtime
+		❯ ipsw download xcode --sim --runtime "iOS 17.0"
+	`),
+	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if viper.GetBool("verbose") {
@@ -70,21 +84,16 @@ var xcodeCmd = &cobra.Command{
 		}
 		color.NoColor = viper.GetBool("no-color")
 
-		viper.BindPFlag("download.proxy", cmd.Flags().Lookup("proxy"))
-		viper.BindPFlag("download.insecure", cmd.Flags().Lookup("insecure"))
-		viper.BindPFlag("download.skip-all", cmd.Flags().Lookup("skip-all"))
-		viper.BindPFlag("download.resume-all", cmd.Flags().Lookup("resume-all"))
-		viper.BindPFlag("download.restart-all", cmd.Flags().Lookup("restart-all"))
-
 		// settings
-		proxy := viper.GetString("download.proxy")
-		insecure := viper.GetBool("download.insecure")
-		skipAll := viper.GetBool("download.skip-all")
-		resumeAll := viper.GetBool("download.resume-all")
-		restartAll := viper.GetBool("download.restart-all")
+		proxy := viper.GetString("download.xcode.proxy")
+		insecure := viper.GetBool("download.xcode.insecure")
+		skipAll := viper.GetBool("download.xcode.skip-all")
+		resumeAll := viper.GetBool("download.xcode.resume-all")
+		restartAll := viper.GetBool("download.xcode.restart-all")
 		// flags
 		latest, _ := cmd.Flags().GetBool("latest")
 		dlSim, _ := cmd.Flags().GetBool("sim")
+		runtime, _ := cmd.Flags().GetString("runtime")
 
 		if dlSim {
 			dvt, err := download.GetDVTDownloadableIndex()
@@ -97,24 +106,34 @@ var xcodeCmd = &cobra.Command{
 				choices = append(choices, dl.Name)
 			}
 
-			var choice string
-			prompt := &survey.Select{
-				Message:  "Select what to download:",
-				Options:  choices,
-				PageSize: 10,
-			}
-			if err := survey.AskOne(prompt, &choice); err == terminal.InterruptErr {
-				log.Warn("Exiting...")
-				return nil
-			}
-
 			var dl download.Downloadable
-			for _, d := range dvt.Downloadables {
-				if d.Name == choice {
-					dl = d
+			if runtime != "" {
+				for _, d := range dvt.Downloadables {
+					if d.Name == runtime {
+						if d.Source == "" {
+							dl = d
+							break
+						}
+					}
+				}
+			} else {
+				var choice string
+				prompt := &survey.Select{
+					Message:  "Select what to download:",
+					Options:  choices,
+					PageSize: 10,
+				}
+				if err := survey.AskOne(prompt, &choice); err == terminal.InterruptErr {
+					log.Warn("Exiting...")
+					return nil
+				}
+
+				for _, d := range dvt.Downloadables {
+					if d.Name == choice {
+						dl = d
+					}
 				}
 			}
-
 			if dl.Source == "" {
 				dl.Source = fmt.Sprintf("https://download.developer.apple.com/Developer_Tools/%s/%s.dmg", strings.ReplaceAll(dl.Name, " ", "_"), strings.ReplaceAll(dl.Name, " ", "_"))
 				dl.Authentication = "virtual"
@@ -173,7 +192,7 @@ var xcodeCmd = &cobra.Command{
 			}
 
 			prompt := &survey.Select{
-				Message:  "Select XCode to download:",
+				Message:  "Select Xcode to download:",
 				Options:  choices,
 				PageSize: 10,
 			}

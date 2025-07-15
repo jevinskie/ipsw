@@ -34,7 +34,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho"
@@ -97,20 +96,15 @@ func init() {
 	machoInfoCmd.Flags().StringP("fileset-entry", "t", "", "Which fileset entry to analyze")
 	machoInfoCmd.RegisterFlagCompletionFunc("fileset-entry", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if ok, _ := magic.IsMachO(args[0]); ok {
-			var m *macho.File
-			fat, err := macho.OpenFat(args[0])
-			if err == nil {
-				m = fat.Arches[0].File
+			// Use non-interactive mode for shell completion
+			m, err := mcmd.OpenMachO(args[0], "")
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
 			}
-			if err == macho.ErrNotFat {
-				m, err = macho.Open(args[0])
-				if err != nil {
-					return nil, cobra.ShellCompDirectiveNoFileComp
-				}
-			}
-			if m.FileTOC.FileHeader.Type == types.MH_FILESET {
+			defer m.Close()
+			if m.File.FileTOC.FileHeader.Type == types.MH_FILESET {
 				var filesetEntries []string
-				for _, fe := range m.FileSets() {
+				for _, fe := range m.File.FileSets() {
 					filesetEntries = append(filesetEntries, fe.EntryID)
 				}
 				return filesetEntries, cobra.ShellCompDirectiveNoFileComp
@@ -250,47 +244,13 @@ var machoInfoCmd = &cobra.Command{
 			folder = extractPath
 		}
 
-		// first check for fat file
-		fat, err := macho.OpenFat(machoPath)
-		if err != nil && err != macho.ErrNotFat {
+		// Use the helper to handle fat/universal files
+		mr, err := mcmd.OpenMachO(machoPath, selectedArch)
+		if err != nil {
 			return err
 		}
-		if err == macho.ErrNotFat {
-			m, err = macho.Open(machoPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			defer fat.Close()
-
-			var arches []string
-			var shortArches []string
-			for _, arch := range fat.Arches {
-				arches = append(arches, fmt.Sprintf("%s, %s", arch.CPU, arch.SubCPU.String(arch.CPU)))
-				shortArches = append(shortArches, strings.ToLower(arch.SubCPU.String(arch.CPU)))
-			}
-			if len(selectedArch) > 0 {
-				found := false
-				for i, opt := range shortArches {
-					if strings.Contains(strings.ToLower(opt), strings.ToLower(selectedArch)) {
-						m = fat.Arches[i].File
-						found = true
-						break
-					}
-				}
-				if !found {
-					return fmt.Errorf("--arch '%s' not found in: %s", selectedArch, strings.Join(shortArches, ", "))
-				}
-			} else {
-				choice := 0
-				prompt := &survey.Select{
-					Message: "Detected a universal MachO file, please select an architecture to analyze:",
-					Options: arches,
-				}
-				survey.AskOne(prompt, &choice)
-				m = fat.Arches[choice].File
-			}
-		}
+		defer mr.Close()
+		m = mr.File
 
 		if dumpCert {
 			if cs := m.CodeSignature(); cs != nil {
@@ -827,7 +787,7 @@ var machoInfoCmd = &cobra.Command{
 			if m.FunctionStarts() != nil {
 				for _, fn := range m.GetFunctions() {
 					if verbose {
-						fmt.Printf("%#016x-%#016x\n", fn.StartAddr, fn.EndAddr)
+						fmt.Printf("%#016x-%#016x size=%d\n", fn.StartAddr, fn.EndAddr, fn.EndAddr-fn.StartAddr)
 					} else {
 						fmt.Printf("%#016x\n", fn.StartAddr)
 					}
@@ -982,12 +942,16 @@ var machoInfoCmd = &cobra.Command{
 				fmt.Println("STRINGS")
 				fmt.Println("=======")
 			}
-			strs, err := mcmd.GetStrings(m)
+			cstrs, err := m.GetCStrings()
 			if err != nil {
 				return fmt.Errorf("failed to get strings: %v", err)
 			}
-			for pos, s := range strs {
-				fmt.Printf("%s: %s\n", symAddrColor("%#09x", pos), symNameColor(fmt.Sprintf("%#v", s)))
+			for sec, strs := range cstrs {
+				fmt.Printf("\n[%s]\n", sec)
+				fmt.Println(strings.Repeat("-", len(sec)) + "--")
+				for s, pos := range strs {
+					fmt.Printf("%s: %s\n", symAddrColor("%#09x", pos), symNameColor(fmt.Sprintf("%#v", s)))
+				}
 			}
 
 			if cfstrs, err := m.GetCFStrings(); err == nil {

@@ -6,11 +6,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"maps"
 	"math/bits"
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho/pkg/codesign"
 	"github.com/blacktop/go-macho/pkg/trie"
@@ -88,6 +92,7 @@ type File struct {
 	dyldStartFnAddr uint64
 	objcOptRoAddr   uint64
 	islandStubs     map[uint64]uint64
+	prewarmData     *PrewarmingHeader
 	size            int64
 
 	r       map[mtypes.UUID]io.ReaderAt
@@ -488,7 +493,7 @@ func (f *File) parseCache(r io.ReaderAt, uuid mtypes.UUID) error {
 
 		sr.Seek(int64(f.Headers[uuid].LocalSymbolsOffset+uint64(f.LocalSymInfo.EntriesOffset)), io.SeekStart)
 
-		for i := 0; i < int(f.LocalSymInfo.EntriesCount); i++ {
+		for i := range int(f.LocalSymInfo.EntriesCount) {
 			// if err := binary.Read(sr, f.ByteOrder, &f.Images[i].CacheLocalSymbolsEntry); err != nil {
 			// 	return nil, err
 			// }
@@ -745,24 +750,87 @@ func (f *File) ParseImageArrays() error {
 
 func (f *File) ParseStubIslands() error {
 	for _, sc := range f.SubCacheInfo {
-		if f.Headers[sc.UUID].ImagesCountOld == 0 && f.Headers[sc.UUID].ImagesCount == 0 {
-			// found a stub island
-			dat := make([]byte, f.Headers[sc.UUID].CodeSignatureOffset-0x4000)
-			if _, err := f.r[sc.UUID].ReadAt(dat, 0x4000); err != nil {
-				return fmt.Errorf("failed to read stub island data: %v", err)
-			}
-			stubs, err := disass.ParseStubsASM(dat, f.MappingsWithSlideInfo[sc.UUID][0].Address+0x4000, func(u uint64) (uint64, error) {
-				return f.ReadPointerAtAddress(u)
-			})
-			if err != nil {
-				return err
-			}
-			for k, v := range stubs {
-				f.islandStubs[k] = v
+		for _, mapping := range f.MappingsWithSlideInfo[sc.UUID] {
+			if mapping.Flags.IsTextStubs() {
+				// found a stub island
+				dat := make([]byte, f.Headers[sc.UUID].CodeSignatureOffset-0x4000)
+				if _, err := f.r[sc.UUID].ReadAt(dat, 0x4000); err != nil {
+					return fmt.Errorf("ParseStubIslands: failed to read stub island data: %v", err)
+				}
+				stubs, err := disass.ParseStubsASM(dat, mapping.Address+0x4000, func(u uint64) (uint64, error) {
+					return f.ReadPointerAtAddress(u)
+				})
+				if err != nil {
+					return fmt.Errorf("ParseStubIslands: failed to parse stub island assembly: %v", err)
+				}
+				maps.Copy(f.islandStubs, stubs)
 			}
 		}
 	}
 	return nil
+}
+
+func (f *File) ParsePrewarmData() error {
+	if f.Headers[f.UUID].MappingOffset <= uint32(unsafe.Offsetof(CacheHeader{}.PrewarmingDataOffset)) {
+		return fmt.Errorf("prewarm data not supported in this DSC format")
+	}
+	// Read prewarm data
+	if f.Headers[f.UUID].PrewarmingDataOffset > 0 && f.Headers[f.UUID].PrewarmingDataSize > 0 {
+		uuid, off, err := f.GetOffset(f.Headers[f.UUID].SharedRegionStart + f.Headers[f.UUID].PrewarmingDataOffset)
+		if err != nil {
+			return fmt.Errorf("failed to get offset for prewarm data header at addr %#x: %v",
+				f.Headers[f.UUID].SharedRegionStart+f.Headers[f.UUID].PrewarmingDataOffset, err)
+		}
+		sr := io.NewSectionReader(f.r[uuid], int64(off), int64(f.Headers[f.UUID].PrewarmingDataSize))
+		var pw PrewarmingHeader
+		if err := binary.Read(sr, f.ByteOrder, &pw.Version); err != nil {
+			return fmt.Errorf("failed to read prewarming header version: %v", err)
+		}
+		if pw.Version != 1 {
+			return fmt.Errorf("unsupported prewarming data version: %d", pw.Version)
+		}
+		if err := binary.Read(sr, f.ByteOrder, &pw.Count); err != nil {
+			return fmt.Errorf("failed to read prewarming header count: %v", err)
+		}
+		pw.Entries = make([]PrewarmingEntry, pw.Count)
+		if err := binary.Read(sr, f.ByteOrder, &pw.Entries); err != nil {
+			return fmt.Errorf("failed to read prewarming entries: %v", err)
+		}
+		f.prewarmData = &pw
+		return nil
+	}
+	return fmt.Errorf("no prewarm data found in DSC %s", f.UUID)
+}
+
+func (f *File) ParseFunctionVariantInfo() error {
+	if f.Headers[f.UUID].MappingOffset <= uint32(unsafe.Offsetof(CacheHeader{}.FunctionVariantInfoAddr)) {
+		return fmt.Errorf("function variant info not supported in this DSC format")
+	}
+	// Read function variant info
+	if f.Headers[f.UUID].FunctionVariantInfoAddr > 0 && f.Headers[f.UUID].FunctionVariantInfoSize > 0 {
+		uuid, off, err := f.GetOffset(f.Headers[f.UUID].FunctionVariantInfoAddr)
+		if err != nil {
+			return fmt.Errorf("failed to get offset for function variant info header at addr %#x: %v",
+				f.Headers[f.UUID].SharedRegionStart+f.Headers[f.UUID].FunctionVariantInfoAddr, err)
+		}
+		sr := io.NewSectionReader(f.r[uuid], int64(off), int64(f.Headers[f.UUID].FunctionVariantInfoSize))
+		var fv CacheFunctionVariantInfo
+		if err := binary.Read(sr, f.ByteOrder, &fv.Version); err != nil {
+			return fmt.Errorf("failed to read function variant info version: %v", err)
+		}
+		if fv.Version != 1 {
+			return fmt.Errorf("unsupported function variant info version: %d", fv.Version)
+		}
+		if err := binary.Read(sr, f.ByteOrder, &fv.Count); err != nil {
+			return fmt.Errorf("failed to read function variant info count: %v", err)
+		}
+		fv.Entries = make([]CacheFunctionVariantEntry, fv.Count)
+		if err := binary.Read(sr, f.ByteOrder, &fv.Entries); err != nil {
+			return fmt.Errorf("failed to read function variant entries: %v", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("no function variant info found in DSC %s", f.UUID)
 }
 
 // GetSlideInfo returns just the slideinfo header info
@@ -1763,7 +1831,16 @@ func (f *File) Image(name string) (*CacheImage, error) {
 		for _, m := range matches {
 			names = append(names, m.Name)
 		}
-		return nil, fmt.Errorf("multiple images found for %s (please supply FULL path):\n\t- %s", name, strings.Join(names, "\n\t- "))
+		var choice string
+		prompt := &survey.Select{
+			Message: "Multiple images found for " + name + ", please select one:",
+			Options: names,
+		}
+		if err := survey.AskOne(prompt, &choice); err == terminal.InterruptErr {
+			log.Warn("Exiting...")
+			return nil, fmt.Errorf("multiple images found for %s (please supply FULL path):\n\t- %s", name, strings.Join(names, "\n\t- "))
+		}
+		return f.Image(choice)
 	}
 	return nil, fmt.Errorf("image %s not found in cache", name)
 }

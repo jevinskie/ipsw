@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-plist"
+	"github.com/blacktop/ipsw/internal/download/rootcert"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/blacktop/ipsw/pkg/info"
 	"github.com/blacktop/ipsw/pkg/ota/types"
@@ -32,7 +34,7 @@ import (
 
 const (
 	clientVersion       = 2
-	certIssuanceDay     = "2020-09-29"
+	certIssuanceDay     = "2023-12-10"
 	pallasURL           = "https://gdmf.apple.com/v2/assets"
 	otaPublicURL        = "https://mesu.apple.com/assets/com_apple_MobileAsset_SoftwareUpdate/com_apple_MobileAsset_SoftwareUpdate.xml"
 	iOS13OtaDevBetaURL  = "https://mesu.apple.com/assets/iOS13DeveloperSeed/com_apple_MobileAsset_SoftwareUpdate/com_apple_MobileAsset_SoftwareUpdate.xml"
@@ -64,9 +66,13 @@ const (
 	macRsrUpdate             assetType = "com.apple.MobileAsset.MacSplatSoftwareUpdate"
 	recoveryOsSoftwareUpdate assetType = "com.apple.MobileAsset.SFRSoftwareUpdate"
 	accessorySoftwareUpdate  assetType = "com.apple.MobileAsset.DarwinAccessoryUpdate.A2525"
-	// XCode Simulator
-	iOsSimulatorUpdate     assetType = "com.apple.MobileAsset.iOSSimulatorRuntime"
-	watchOsSimulatorUpdate assetType = "com.apple.MobileAsset.watchOSSimulatorRuntime"
+	// Xcode Simulator
+	iOsSimulatorUpdate      assetType = "com.apple.MobileAsset.iOSSimulatorRuntime"
+	tvOsSimulatorUpdate     assetType = "com.apple.MobileAsset.appleTVOSSimulatorRuntime"
+	watchOsSimulatorUpdate  assetType = "com.apple.MobileAsset.watchOSSimulatorRuntime"
+	visionOaSimulatorUpdate assetType = "com.apple.MobileAsset.xrOSSimulatorRuntime"
+	// misc
+	wallpaperUpdate assetType = "com.apple.MobileAsset.Wallpaper" // uses iOS generic audience
 )
 
 // Ota is an OTA object
@@ -84,6 +90,7 @@ type OtaConf struct {
 	Latest          bool
 	Delta           bool
 	RSR             bool
+	Simulator       bool
 	Device          string
 	Model           string
 	Version         *version.Version
@@ -106,6 +113,7 @@ type pallasRequest struct {
 	BuildVersion            string    `json:"BuildVersion"`
 	Build                   string    `json:"Build,omitempty"`
 	RequestedProductVersion string    `json:"RequestedProductVersion,omitempty"`
+	RequestedBuild          string    `json:"RequestedBuild,omitempty"`
 	Supervised              bool      `json:"Supervised,omitempty"`
 	DelayRequested          bool      `json:"DelayRequested,omitempty"`
 	CompatibilityVersion    int       `json:"CompatibilityVersion,omitempty"`
@@ -125,7 +133,7 @@ type ota struct {
 	SessionID       string          `plist:"SessionId,omitempty" json:"SessionId,omitempty"`
 	LegacyXMLURL    string          `plist:"LegacyXmlUrl,omitempty" json:"LegacyXmlUrl,omitempty"`
 	PostingDate     string          `plist:"PostingDate,omitempty" json:"PostingDate,omitempty"`
-	Transformations transformations `plist:"Transformations,omitempty" json:"Transformations,omitempty"`
+	Transformations transformations `plist:"Transformations,omitempty" json:"Transformations"`
 }
 
 type transformations struct {
@@ -301,6 +309,20 @@ func (o *Ota) getRequestAssetTypes() ([]assetType, error) {
 		if o.Config.RSR {
 			return []assetType{rsrUpdate}, nil
 		}
+		if o.Config.Simulator {
+			switch o.Config.Platform {
+			case "ios":
+				return []assetType{iOsSimulatorUpdate}, nil
+			case "watchos":
+				return []assetType{watchOsSimulatorUpdate}, nil
+			case "tvos":
+				return []assetType{tvOsSimulatorUpdate}, nil
+			case "visionos":
+				return []assetType{visionOaSimulatorUpdate}, nil
+			default:
+				return nil, fmt.Errorf("unsupported simulator platform %s", o.Config.Platform)
+			}
+		}
 		if o.Config.Platform == "ios" {
 			return []assetType{softwareUpdate}, nil
 		}
@@ -333,14 +355,21 @@ func (o *Ota) getRequestAudienceIDs() ([]string, error) {
 			}
 			if segs[0] == 0 { // empty version
 				latest := assetAudienceDB.LatestVersion("macos")
-				return []string{
-					assetAudienceDB["macos"].Versions[latest].DeveloperBeta,
-					assetAudienceDB["macos"].Versions[latest].AppleSeedBeta,
-					assetAudienceDB["macos"].Versions[latest].PublicBeta,
-					assetAudienceDB["macos"].Release,
-					assetAudienceDB["macos"].Alternate,
-					assetAudienceDB["macos"].Generic,
-				}, nil
+				if o.Config.Beta {
+					// For beta, only return beta audiences
+					return []string{
+						assetAudienceDB["macos"].Versions[latest].DeveloperBeta,
+						assetAudienceDB["macos"].Versions[latest].AppleSeedBeta,
+						assetAudienceDB["macos"].Versions[latest].PublicBeta,
+					}, nil
+				} else {
+					// For stable, only return stable audiences
+					return []string{
+						assetAudienceDB["macos"].Release,
+						assetAudienceDB["macos"].Alternate,
+						assetAudienceDB["macos"].Generic,
+					}, nil
+				}
 			}
 			if o.Config.Platform == "accessory" {
 				// looup major version in DB
@@ -353,20 +382,27 @@ func (o *Ota) getRequestAudienceIDs() ([]string, error) {
 				}
 			} else {
 				// looup major version in DB
-				assetAudiences := []string{
-					assetAudienceDB[o.Config.Platform].Release,
-					assetAudienceDB[o.Config.Platform].Alternate,
-					assetAudienceDB[o.Config.Platform].Generic,
-				}
-				if v, ok := assetAudienceDB[o.Config.Platform].Versions[fmt.Sprintf("%d.%d", segs[0], segs[1])]; ok {
-					assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
-				} else if v, ok := assetAudienceDB[o.Config.Platform].Versions[strconv.Itoa(segs[0])]; ok {
-					assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
+				var assetAudiences []string
+				
+				if o.Config.Beta {
+					// For beta, only include beta audiences
+					if v, ok := assetAudienceDB[o.Config.Platform].Versions[fmt.Sprintf("%d.%d", segs[0], segs[1])]; ok {
+						assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
+					} else if v, ok := assetAudienceDB[o.Config.Platform].Versions[strconv.Itoa(segs[0])]; ok {
+						assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
+					} else {
+						return nil, fmt.Errorf(
+							"invalid version %s (must be one of %s)",
+							o.Config.Version,
+							strings.Join(utils.StrSliceAddSuffix(assetAudienceDB.GetVersions("macos"), ".x"), ", "))
+					}
 				} else {
-					return nil, fmt.Errorf(
-						"invalid version %s (must be one of %s)",
-						o.Config.Version,
-						strings.Join(utils.StrSliceAddSuffix(assetAudienceDB.GetVersions("macos"), ".x"), ", "))
+					// For stable, only include stable audiences
+					assetAudiences = []string{
+						assetAudienceDB[o.Config.Platform].Release,
+						assetAudienceDB[o.Config.Platform].Alternate,
+						assetAudienceDB[o.Config.Platform].Generic,
+					}
 				}
 				return assetAudiences, nil
 			}
@@ -377,6 +413,9 @@ func (o *Ota) getRequestAudienceIDs() ([]string, error) {
 			}, nil
 		}
 	default:
+		if o.Config.Simulator {
+			return []string{assetAudienceDB["macos"].Generic}, nil
+		}
 		if o.Config.Version != nil {
 			segs := o.Config.Version.Segments()
 			if len(segs) == 0 {
@@ -385,44 +424,74 @@ func (o *Ota) getRequestAudienceIDs() ([]string, error) {
 			if segs[0] == 0 { // empty version
 				latest := assetAudienceDB.LatestVersion(o.Config.Platform)
 				if latest == "" {
+					if o.Config.Beta {
+						return nil, fmt.Errorf("no beta versions available for platform %s", o.Config.Platform)
+					}
 					return []string{
 						assetAudienceDB[o.Config.Platform].Release,
 						assetAudienceDB[o.Config.Platform].Alternate,
 						assetAudienceDB[o.Config.Platform].Generic,
 					}, nil
 				}
+
+				// Filter audiences based on beta flag
+				if o.Config.Beta {
+					return []string{
+						assetAudienceDB[o.Config.Platform].Versions[latest].DeveloperBeta,
+						assetAudienceDB[o.Config.Platform].Versions[latest].AppleSeedBeta,
+						assetAudienceDB[o.Config.Platform].Versions[latest].PublicBeta,
+					}, nil
+				} else {
+					return []string{
+						assetAudienceDB[o.Config.Platform].Release,
+						assetAudienceDB[o.Config.Platform].Alternate,
+						assetAudienceDB[o.Config.Platform].Generic,
+					}, nil
+				}
+			}
+			// looup major version in DB
+			var assetAudiences []string
+
+			if o.Config.Beta {
+				// For beta, only include beta audiences
+				if v, ok := assetAudienceDB[o.Config.Platform].Versions[fmt.Sprintf("%d.%d", segs[0], segs[1])]; ok {
+					assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
+				} else if v, ok := assetAudienceDB[o.Config.Platform].Versions[strconv.Itoa(segs[0])]; ok {
+					assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
+				} else {
+					return nil, fmt.Errorf(
+						"invalid version %s (must be one of %s)",
+						o.Config.Version,
+						strings.Join(utils.StrSliceAddSuffix(assetAudienceDB.GetVersions(o.Config.Platform), ".x"), ", "))
+				}
+			} else {
+				// For stable, only include stable audiences
+				assetAudiences = []string{
+					assetAudienceDB[o.Config.Platform].Release,
+					assetAudienceDB[o.Config.Platform].Alternate,
+					assetAudienceDB[o.Config.Platform].Generic,
+				}
+			}
+			return assetAudiences, nil
+		} else {
+			if o.Config.Beta {
+				// Get latest version for beta audiences
+				latest := assetAudienceDB.LatestVersion(o.Config.Platform)
+				if latest == "" {
+					return nil, fmt.Errorf("no beta versions available for platform %s", o.Config.Platform)
+				}
 				return []string{
 					assetAudienceDB[o.Config.Platform].Versions[latest].DeveloperBeta,
 					assetAudienceDB[o.Config.Platform].Versions[latest].AppleSeedBeta,
 					assetAudienceDB[o.Config.Platform].Versions[latest].PublicBeta,
-					assetAudienceDB[o.Config.Platform].Generic,
+				}, nil
+			} else {
+				return []string{
 					assetAudienceDB[o.Config.Platform].Release,
 					assetAudienceDB[o.Config.Platform].Alternate,
+					assetAudienceDB[o.Config.Platform].Generic,
 				}, nil
 			}
-			// looup major version in DB
-			assetAudiences := []string{
-				assetAudienceDB[o.Config.Platform].Release,
-				assetAudienceDB[o.Config.Platform].Alternate,
-				assetAudienceDB[o.Config.Platform].Generic,
-			}
-			if v, ok := assetAudienceDB[o.Config.Platform].Versions[fmt.Sprintf("%d.%d", segs[0], segs[1])]; ok {
-				assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
-			} else if v, ok := assetAudienceDB[o.Config.Platform].Versions[strconv.Itoa(segs[0])]; ok {
-				assetAudiences = append(assetAudiences, v.DeveloperBeta, v.AppleSeedBeta, v.PublicBeta)
-			} else {
-				return nil, fmt.Errorf(
-					"invalid version %s (must be one of %s)",
-					o.Config.Version,
-					strings.Join(utils.StrSliceAddSuffix(assetAudienceDB.GetVersions(o.Config.Platform), ".x"), ", "))
-			}
-			return assetAudiences, nil
-		} else {
-			return []string{
-				assetAudienceDB[o.Config.Platform].Release,
-				assetAudienceDB[o.Config.Platform].Alternate,
-				assetAudienceDB[o.Config.Platform].Generic,
-			}, nil
 		}
 	}
 	return nil, fmt.Errorf("unsupported platform %s", o.Config.Platform)
@@ -431,10 +500,10 @@ func (o *Ota) getRequestAudienceIDs() ([]string, error) {
 func (o *Ota) getRequests(atype assetType, audienceID string) (reqs []pallasRequest, err error) {
 
 	req := pallasRequest{
-		ClientVersion: clientVersion,
-		AssetType:     atype,
-		AssetAudience: audienceID,
-		// CertIssuanceDay:      certIssuanceDay,
+		ClientVersion:        clientVersion,
+		AssetType:            atype,
+		AssetAudience:        audienceID,
+		CertIssuanceDay:      certIssuanceDay,
 		ProductVersion:       o.Config.Version.Original(),
 		BuildVersion:         o.Config.Build,
 		ProductType:          o.Config.Device,
@@ -458,6 +527,10 @@ func (o *Ota) getRequests(atype assetType, audienceID string) (reqs []pallasRequ
 	if o.Config.RSR {
 		req.RestoreVersion = "0.0.0.0.0,0"
 		req.Build = o.Config.Build
+	}
+
+	if o.Config.Simulator {
+		req.RequestedBuild = o.Config.Build
 	}
 
 	if len(o.Config.Device) > 0 && len(o.Config.Model) == 0 {
@@ -535,10 +608,16 @@ func sendPostAsync(body []byte, rc chan *http.Response, config *OtaConf) error {
 	req.Header.Add("User-Agent", utils.RandomAgent())
 	// req.Header.Add("User-Agent", "Configurator/2.15 (Macintosh; OS X 11.0.0; 16G29) AppleWebKit/2603.3.8")
 
+	certpool := x509.NewCertPool()
+	certpool.AddCert(rootcert.AppleRootCA)
+
 	client := &http.Client{
 		Transport: &http.Transport{
-			Proxy:           GetProxy(config.Proxy),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: config.Insecure},
+			Proxy: GetProxy(config.Proxy),
+			TLSClientConfig: &tls.Config{
+				RootCAs:    certpool,
+				MinVersion: tls.VersionTLS12,
+			},
 		},
 		Timeout: config.Timeout * time.Second,
 	}
@@ -556,6 +635,21 @@ func (o *Ota) GetPallasOTAs() ([]types.Asset, error) {
 	var err error
 
 	oassets := o.QueryPublicXML()
+
+	if o.Config.Simulator {
+		if o.Config.Version.Original() == "0" && o.Config.Build == "0" {
+			return nil, fmt.Errorf("you must supply: --build, --version or --latest WITH --sim")
+		} else if o.Config.Version.Original() != "0" && o.Config.Build == "0" {
+			dvt, err := GetDVTDownloadableIndex()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get simulators index: %v", err)
+			}
+			o.Config.Build, err = dvt.LookupBuild(o.Config.Version.Original(), o.Config.Platform)
+			if err != nil {
+				return nil, fmt.Errorf("failed to lookup simulator build: %v", err)
+			}
+		}
+	}
 
 	pallasReqs, err := o.buildPallasRequests()
 	if err != nil {
@@ -613,6 +707,8 @@ func (o *Ota) GetPallasOTAs() ([]types.Asset, error) {
 			log.Debugf("[ERROR]\n%s", string(b64data))
 			continue
 		}
+
+		// os.WriteFile("pallas.json", b64data, 0644)
 
 		res := ota{}
 		if err := json.Unmarshal(b64data, &res); err != nil {
@@ -694,6 +790,16 @@ func (o *Ota) filterOTADevices(otas []types.Asset) []types.Asset { // FIXME: thi
 	var devices []string
 	var filteredDevices []string
 	var filteredOtas []types.Asset
+
+	if o.Config.Simulator {
+		for _, ota := range otas {
+			switch assetType(ota.AssetType) {
+			case iOsSimulatorUpdate, watchOsSimulatorUpdate, tvOsSimulatorUpdate, visionOaSimulatorUpdate:
+				filteredOtas = append(filteredOtas, ota)
+			}
+		}
+		return filteredOtas
+	}
 
 	if o.Config.Platform == "macos" {
 		if o.Config.Build != "0" && !o.Config.RSR {

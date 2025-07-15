@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -84,7 +85,7 @@ func TrimPrefixStrSlice(slice []string, prefix string) []string {
 func RemoveStrFromSlice(s []string, r string) []string {
 	for i, v := range s {
 		if v == r {
-			return append(s[:i], s[i+1:]...)
+			return slices.Delete(s, i, i+1)
 		}
 	}
 	return s
@@ -113,6 +114,22 @@ func ConvertStrToInt(intStr string) (uint64, error) {
 	return strconv.ParseUint(intStr, 10, 64)
 }
 
+func ReadCString(r io.Reader) (string, error) {
+	var bytes []byte
+	for {
+		b := make([]byte, 1)
+		_, err := r.Read(b)
+		if err != nil {
+			return "", err
+		}
+		if b[0] == 0 {
+			break
+		}
+		bytes = append(bytes, b[0])
+	}
+	return string(bytes), nil
+}
+
 // GrepStrings returns all matching strings in []byte
 func GrepStrings(data []byte, searchStr string) []string {
 
@@ -139,14 +156,36 @@ func GrepStrings(data []byte, searchStr string) []string {
 	return matchStrings
 }
 
+// isAsciiPunctOrSpace checks if a rune is common ASCII punctuation or a space.
+func isAsciiPunctOrSpace(r rune) bool {
+	switch r {
+	case ' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/',
+		':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '\n', '\r', '\t':
+		return true
+	default:
+		return false
+	}
+}
+
 // IsASCII checks if given string is ascii
 func IsASCII(s string) bool {
 	for _, r := range s {
-		if r > unicode.MaxASCII || !unicode.IsPrint(r) {
+		if (r > unicode.MaxASCII || !unicode.IsPrint(r)) && !isAsciiPunctOrSpace(r) {
 			return false
 		}
 	}
 	return true
+}
+
+func IsPrintable(s string) bool {
+	isPrintable := true
+	for _, r := range s {
+		if !unicode.IsPrint(r) && !unicode.IsSpace(r) {
+			isPrintable = false
+			break
+		}
+	}
+	return isPrintable
 }
 
 // UnicodeSanitize sanitizes string to be used in Hugo URL's, allowing only
@@ -190,12 +229,7 @@ func UnicodeSanitize(s string) string {
 }
 
 func IsPunctuation(c byte) bool {
-	for _, r := range []byte("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") {
-		if c == r {
-			return true
-		}
-	}
-	return false
+	return slices.Contains([]byte("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"), c)
 }
 
 func IsSpace(c byte) bool {

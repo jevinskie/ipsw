@@ -10,8 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-macho/pkg/trie"
@@ -338,6 +338,34 @@ func (f *File) DumpStubIslands() error {
 	return nil
 }
 
+func (f *File) DumpPrewarmData() error {
+	if err := f.ParsePrewarmData(); err != nil {
+		return fmt.Errorf("failed to parse prewarming data: %v", err)
+	}
+	fmt.Printf("Prewarming data version: %d\n", f.prewarmData.Version)
+	for _, entry := range f.prewarmData.Entries {
+		_, addr, err := f.GetCacheVMAddress(entry.CacheVMOffset())
+		if err != nil {
+			return fmt.Errorf("failed to get cache VM address for entry %v: %v", entry, err)
+		}
+		target := addr + uint64(entry.NumPages()*DyldCachePrewarmingDataPageSize)
+		addrName, aok := f.AddressToSymbol[addr]
+		targetName, tok := f.AddressToSymbol[target]
+		if aok || tok {
+			if addrName == "" {
+				addrName = "?"
+			}
+			if targetName == "" {
+				targetName = "?"
+			}
+			fmt.Printf("%#x -> %#x (%s -> %s)\n", addr, target, addrName, targetName)
+		} else {
+			fmt.Printf("%#x -> %#x\n", addr, target)
+		}
+	}
+	return nil
+}
+
 func (f *File) GetStubIslands() (map[uint64]string, error) {
 	stubs := make(map[uint64]string)
 	if len(f.islandStubs) == 0 {
@@ -356,58 +384,55 @@ func (f *File) GetStubIslands() (map[uint64]string, error) {
 // OpenOrCreateA2SCache returns an address to symbol map if the cache file exists otherwise it will create a NEW one
 func (f *File) OpenOrCreateA2SCache(cacheFile string) error {
 	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
-		log.Info("parsing public symbols...")
-		if err := f.ParsePublicSymbols(false); err != nil {
-			utils.Indent(log.Warn, 2)(fmt.Sprintf("failed to parse all exported symbols: %v", err))
-		}
-		log.Info("parsing private symbols...")
-		if err = f.ParseLocalSyms(false); err != nil {
-			if errors.Is(err, ErrNoLocals) {
-				utils.Indent(log.Warn, 2)("cache does NOT contain local symbols")
-			} else {
-				return err
+		// check for temp cache file
+		tempa2sfile := filepath.Join(os.TempDir(), f.UUID.String()+".a2s")
+		if _, err := os.Stat(tempa2sfile); os.IsNotExist(err) {
+			// neither cache file exists, so create a new one
+			log.Info("parsing public symbols...")
+			if err := f.ParsePublicSymbols(false); err != nil {
+				utils.Indent(log.Warn, 2)(fmt.Sprintf("failed to parse all exported symbols: %v", err))
 			}
-		}
-		if f.Headers[f.UUID].CacheType == CacheTypeUniversal {
-			log.Info("parsing stub islands...")
-			if err := f.ParseStubIslands(); err != nil {
-				return fmt.Errorf("failed to parse stub islands: %v", err)
+			log.Info("parsing private symbols...")
+			if err = f.ParseLocalSyms(false); err != nil {
+				if errors.Is(err, ErrNoLocals) {
+					utils.Indent(log.Warn, 2)("cache does NOT contain local symbols")
+				} else {
+					return err
+				}
 			}
-			for stub, target := range f.islandStubs {
-				if symName, ok := f.AddressToSymbol[target]; ok {
-					if !strings.HasPrefix(symName, "j_") {
-						f.AddressToSymbol[stub] = "j_" + strings.TrimPrefix(symName, "__stub_helper.")
-					} else {
-						f.AddressToSymbol[stub] = symName
+			if f.Headers[f.UUID].CacheType == CacheTypeUniversal {
+				log.Info("parsing stub islands...")
+				if err := f.ParseStubIslands(); err != nil {
+					return fmt.Errorf("failed to parse stub islands: %v", err)
+				}
+				for stub, target := range f.islandStubs {
+					if symName, ok := f.AddressToSymbol[target]; ok {
+						f.AddressToSymbol[stub] = symName + "_stub"
 					}
 				}
 			}
+			log.Info("parsing objc info...")
+			if err := f.ParseAllObjc(); err != nil {
+				utils.Indent(log.Error, 2)(fmt.Sprintf("failed to parse objc info: %v: Continuing on without it...", err))
+			}
+			return f.SaveAddrToSymMap(cacheFile)
+		} else {
+			log.Warnf("found symbol cache in %s", tempa2sfile)
+			cacheFile = tempa2sfile
 		}
-		log.Info("parsing objc info...")
-		if err := f.ParseAllObjc(); err != nil {
-			utils.Indent(log.Error, 2)(fmt.Sprintf("failed to parse objc info: %v: Continuing on without it...", err))
-		}
-		return f.SaveAddrToSymMap(cacheFile)
 	}
-
+	// cache file exists, so load it
 	a2sFile, err := os.Open(cacheFile)
 	if err != nil {
 		return err
 	}
+	defer a2sFile.Close()
 
 	log.Infof("Loading symbol cache file...")
-	// gzr, err := gzip.NewReader(a2sFile)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to create gzip reader: %v", err)
-	// }
-	// Decoding the serialized data
-	// err = gob.NewDecoder(gzr).Decode(&f.AddressToSymbol)
-	err = gob.NewDecoder(a2sFile).Decode(&f.AddressToSymbol)
-	if err != nil {
-		return err
+	if err := gob.NewDecoder(a2sFile).Decode(&f.AddressToSymbol); err != nil {
+		a2sFile.Close()
+		return fmt.Errorf("failed to decode addr2sym map from binary: %v", err)
 	}
-	// gzr.Close()
-	a2sFile.Close()
 
 	f.symCacheLoaded = true
 
@@ -415,49 +440,58 @@ func (f *File) OpenOrCreateA2SCache(cacheFile string) error {
 }
 
 // SaveAddrToSymMap saves the dyld address-to-symbol map to disk
-func (f *File) SaveAddrToSymMap(dest string) error {
-	var err error
-	var of *os.File
+func (f *File) SaveAddrToSymMap(dest string) (err error) {
+	of, err := os.Create(dest)
+	if err != nil {
+		// check for permission error (read-only location)
+		if errors.Is(err, os.ErrPermission) {
+			var e *os.PathError
+			if errors.As(err, &e) {
+				log.Errorf("failed to create symbol cache file %s (most likely a read-only location): %v", filepath.Base(e.Path), e.Err)
+			}
+			tmpcache := filepath.Join(os.TempDir(), f.UUID.String()+".a2s")
+			of, err = os.Create(tmpcache)
+			if err != nil {
+				return fmt.Errorf("failed to create temp cache file: %v", err)
+			}
+			utils.Indent(log.Warn, 2)("creating in the tmp folder")
+			utils.Indent(log.Warn, 3)(fmt.Sprintf("to use in the future supply the flag: --cache %s ", tmpcache))
+			dest = tmpcache
+		} else {
+			return fmt.Errorf("failed to create symbol cache file %s: %v", dest, err)
+		}
+	}
 
 	buff := new(bytes.Buffer)
 
-	of, err = os.Create(dest)
-	if errors.Is(err, os.ErrPermission) {
-		var e *os.PathError
-		if errors.As(err, &e) {
-			log.Errorf("failed to create address to symbol cache file %s (%v)", e.Path, e.Err)
-		}
-		tmpDir := os.TempDir()
-		if runtime.GOOS == "darwin" {
-			tmpDir = "/tmp"
-		}
-		tempa2sfile := filepath.Join(tmpDir, f.UUID.String()+".a2s")
-		of, err = os.Create(tempa2sfile)
-		if err != nil {
-			return err
-		}
-		utils.Indent(log.Warn, 2)("creating in the temp folder")
-		utils.Indent(log.Warn, 3)(fmt.Sprintf("to use in the future you must supply the flag: --cache %s ", tempa2sfile))
-	} else if err != nil {
-		return err
-	}
-	defer of.Close()
-
-	e := gob.NewEncoder(buff)
-
 	// Encoding the map
-	err = e.Encode(f.AddressToSymbol)
-	if err != nil {
+	if err := gob.NewEncoder(buff).Encode(f.AddressToSymbol); err != nil {
 		return fmt.Errorf("failed to encode addr2sym map to binary: %v", err)
 	}
 
-	// gzw := gzip.NewWriter(of)
-	// defer gzw.Close()
-
-	// _, err = buff.WriteTo(gzw)
-	_, err = buff.WriteTo(of)
-	if err != nil {
-		return fmt.Errorf("failed to write addr2sym map to gzip file: %v", err)
+	if _, err = buff.WriteTo(of); err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			// check for out of space error (mounted IPSW dmgs return this)
+			if errors.Is(pathErr.Err, syscall.ENOSPC) {
+				log.Errorf("failed to create symbol cache file %s (most likely a mounted IPSW dmg): %v", filepath.Base(pathErr.Path), pathErr.Err)
+				tmpcache := filepath.Join(os.TempDir(), f.UUID.String()+".a2s")
+				of, err = os.Create(tmpcache)
+				if err != nil {
+					return fmt.Errorf("failed to create temp cache file: %v", err)
+				}
+				utils.Indent(log.Warn, 2)("creating in the tmp folder")
+				utils.Indent(log.Warn, 3)(fmt.Sprintf("to use in the future supply the flag: --cache %s ", tmpcache))
+				if _, err = buff.WriteTo(of); err != nil {
+					return fmt.Errorf("failed to write addr2sym map to file: %v", err)
+				}
+				if err := os.Remove(dest); err != nil {
+					return fmt.Errorf("failed to remove old cache file %s: %v", dest, err)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("failed to write addr2sym map to file: %v", err)
 	}
 
 	return nil

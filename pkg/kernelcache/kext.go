@@ -3,6 +3,7 @@ package kernelcache
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -40,9 +41,9 @@ type CFBundle struct {
 	SupportedPlatforms  []string `plist:"CFBundleSupportedPlatforms,omitempty" json:"supported_platforms,omitempty"`
 	Signature           string   `plist:"CFBundleSignature,omitempty" json:"signature,omitempty"`
 
-	IOKitPersonalities map[string]interface{} `plist:"IOKitPersonalities,omitempty" json:"io_kit_personalities,omitempty"`
-	OSBundleLibraries  map[string]string      `plist:"OSBundleLibraries,omitempty" json:"os_bundle_libraries,omitempty"`
-	UIDeviceFamily     []int                  `plist:"UIDeviceFamily,omitempty" json:"ui_device_family,omitempty"`
+	IOKitPersonalities map[string]any    `plist:"IOKitPersonalities,omitempty" json:"io_kit_personalities,omitempty"`
+	OSBundleLibraries  map[string]string `plist:"OSBundleLibraries,omitempty" json:"os_bundle_libraries,omitempty"`
+	UIDeviceFamily     []int             `plist:"UIDeviceFamily,omitempty" json:"ui_device_family,omitempty"`
 
 	OSBundleRequired             string   `plist:"OSBundleRequired,omitempty" json:"os_bundle_required,omitempty"`
 	UIRequiredDeviceCapabilities []string `plist:"UIRequiredDeviceCapabilities,omitempty" json:"ui_required_device_capabilities,omitempty"`
@@ -167,14 +168,8 @@ func GetKexts(kernel *macho.File) ([]CFBundle, error) {
 }
 
 // KextList lists all the kernel extensions in the kernelcache
-func KextList(kernelPath string, diffable bool) ([]string, error) {
+func KextList(m *macho.File, diffable bool) ([]string, error) {
 	var out []string
-
-	m, err := macho.Open(kernelPath)
-	if err != nil {
-		return nil, err
-	}
-	defer m.Close()
 
 	bundles, err := GetKexts(m)
 	if err != nil {
@@ -192,15 +187,35 @@ func KextList(kernelPath string, diffable bool) ([]string, error) {
 		}
 	} else {
 		for _, bundle := range bundles {
+			var b string
 			if !bundle.OSKernelResource && len(kextStartAdddrs) > 0 {
-				out = append(out, fmt.Sprintf("%#x: %s (%s)", kextStartAdddrs[bundle.ModuleIndex]|tagPtrMask, bundle.ID, bundle.Version))
+				b = fmt.Sprintf("%#x: %s", kextStartAdddrs[bundle.ModuleIndex]|tagPtrMask, bundle.ID)
 			} else {
-				out = append(out, fmt.Sprintf("%#x: %s (%s)", bundle.ExecutableLoadAddr, bundle.ID, bundle.Version))
+				b = fmt.Sprintf("%#x: %s", bundle.ExecutableLoadAddr, bundle.ID)
 			}
+			if len(bundle.Version) > 0 {
+				b += fmt.Sprintf(" (%s)", bundle.Version)
+			}
+			out = append(out, b)
 		}
 	}
 
 	sort.Strings(out)
 
 	return out, nil
+}
+
+// KextJSON returns the kernel extensions in the kernelcache as a JSON string
+func KextJSON(m *macho.File) (string, error) {
+	kexts, err := GetKexts(m)
+	if err != nil {
+		return "", err
+	}
+
+	data, err := json.Marshal(kexts)
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
 }

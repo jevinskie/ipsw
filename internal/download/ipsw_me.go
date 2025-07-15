@@ -30,8 +30,8 @@ type IPSW struct {
 	MD5         string    `json:"md5sum,omitempty"`
 	FileSize    int       `json:"filesize,omitempty"`
 	URL         string    `json:"url,omitempty"`
-	ReleaseDate time.Time `json:"releasedate,omitempty"`
-	UploadDate  time.Time `json:"uploaddate,omitempty"`
+	ReleaseDate time.Time `json:"releasedate"`
+	UploadDate  time.Time `json:"uploaddate"`
 	Signed      bool      `json:"signed,omitempty"`
 }
 
@@ -185,7 +185,7 @@ func GetVersion(buildID string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("build did not a version")
+	return "", fmt.Errorf("build did not match a version in the ipsw.me API")
 }
 
 // GetBuildID returns the BuildID for a given version and identifier

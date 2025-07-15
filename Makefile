@@ -22,7 +22,7 @@ x86-brew: ## Install the x86_64 homebrew on Apple Silicon
 	mkdir /tmp/homebrew
 	cd /tmp; curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C homebrew
 	sudo mv /tmp/homebrew /usr/local/homebrew
-	arch -x86_64 /usr/local/homebrew/bin/brew install unicorn libusb
+	arch -x86_64 /usr/local/homebrew/bin/brew install unicorn libusb libheif
 
 .PHONY: setup
 setup: build-deps dev-deps ## Install all the build and dev dependencies
@@ -110,7 +110,7 @@ update_mod: ## Update go.mod file
 	go mod tidy
 
 .PHONY: update_devs
-update_devs: ## Parse XCode database for new devices
+update_devs: ## Parse Xcode database for new devices
 	@echo " > Updating device_traits.json"
 	go run ./cmd/ipsw/main.go device-list-gen pkg/xcode/data/device_traits.json
 
@@ -165,12 +165,19 @@ work-macho: ## Work on go-macho package
 	@echo " > Working on go-macho package"
 	@go work init || true
 	@go work use . ../go-macho
+	@go work use . ../go-dwarf
 
 .PHONY: work-apfs
 work-apfs: ## Work on go-apfs package
 	@echo " > Working on go-apfs package"
 	@go work init || true
 	@go work use . ../go-apfs
+
+.PHONY: work-term
+work-term: ## Work on go-termimg package
+	@echo " > Working on go-termimg package"
+	@go work init || true
+	@go work use . ../go-termimg
 
 .PHONY: docker
 docker: ## Build docker image

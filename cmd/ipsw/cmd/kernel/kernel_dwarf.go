@@ -23,7 +23,6 @@ package kernel
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/apex/log"
 	"github.com/blacktop/ipsw/internal/commands/dwarf"
+	"github.com/blacktop/ipsw/internal/demangle"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/fatih/color"
 
@@ -60,7 +60,7 @@ func selectKDKs() ([]string, error) {
 	if err := survey.AskOne(prompt, &selKDKs, survey.WithValidator(survey.MinItems(2)), survey.WithValidator(survey.MaxItems(2))); err != nil {
 		if err == terminal.InterruptErr {
 			log.Warn("Exiting...")
-			os.Exit(0)
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func selectKDKs() ([]string, error) {
 	if err := survey.AskOne(prompt2, &kern); err != nil {
 		if err == terminal.InterruptErr {
 			log.Warn("Exiting...")
-			os.Exit(0)
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func selectKDK() (string, error) {
 	if err := survey.AskOne(prompt, &selKDK); err != nil {
 		if err == terminal.InterruptErr {
 			log.Warn("Exiting...")
-			os.Exit(0)
+			return "", nil
 		}
 		return "", err
 	}
@@ -155,7 +155,7 @@ func selectKDK() (string, error) {
 	if err := survey.AskOne(prompt, &kern); err != nil {
 		if err == terminal.InterruptErr {
 			log.Warn("Exiting...")
-			os.Exit(0)
+			return "", nil
 		}
 		return "", err
 	}
@@ -243,30 +243,34 @@ var dwarfCmd = &cobra.Command{
 			}
 
 			if len(viper.GetString("kernel.dwarf.type")) > 0 {
-				t1, _, err := dwarf.GetType(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.type"), !noOffsets)
+				t1, err := dwarf.GetType(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.type"), !noOffsets)
 				if err != nil {
 					return err
 				}
 
-				t2, _, err := dwarf.GetType(filepath.Clean(args[1]), viper.GetString("kernel.dwarf.type"), !noOffsets)
+				t2, err := dwarf.GetType(filepath.Clean(args[1]), viper.GetString("kernel.dwarf.type"), !noOffsets)
 				if err != nil {
 					return err
 				}
 
-				if t1 == "" || t2 == "" {
+				if len(t1) == 0 || len(t2) == 0 {
 					return fmt.Errorf("could not find type '%s' in one or both of the files", viper.GetString("kernel.dwarf.type"))
 				}
 
-				out, err := utils.GitDiff(t1, t2, &utils.GitDiffConfig{Color: viper.GetBool("color") && !viper.GetBool("no-color"), Tool: viper.GetString("diff-tool")})
-				if err != nil {
-					return err
-				}
+				for file2, typ2 := range t2 {
+					if typ1, found := t1[file2]; found {
+						out, err := utils.GitDiff(typ1, typ2, &utils.GitDiffConfig{Color: viper.GetBool("color") && !viper.GetBool("no-color"), Tool: viper.GetString("diff-tool")})
+						if err != nil {
+							return err
+						}
 
-				if len(out) == 0 {
-					log.Info("No differences found")
-				} else {
-					log.Info("Differences found")
-					fmt.Println(out)
+						if len(out) == 0 {
+							log.Info("No differences found")
+						} else {
+							log.Info("Differences found")
+							fmt.Println(out)
+						}
+					}
 				}
 			} else { // diff ALL structs
 				out, err := dwarf.DiffEnums(filepath.Clean(args[0]), filepath.Clean(args[1]), &dwarf.Config{
@@ -316,58 +320,73 @@ var dwarfCmd = &cobra.Command{
 		}
 
 		if len(viper.GetString("kernel.dwarf.type")) > 0 {
-			typstr, file, err := dwarf.GetType(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.type"), !noOffsets)
+			typs, err := dwarf.GetType(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.type"), !noOffsets)
 			if err != nil {
 				return err
 			}
-			if len(file) > 0 {
-				if _, after, ok := strings.Cut(file, "/Library/Caches/com.apple.xbs/Sources/"); ok {
-					log.WithField("file", after).Info(viper.GetString("kernel.dwarf.type"))
-				} else {
-					log.WithField("file", file).Info(viper.GetString("kernel.dwarf.type"))
+			for file, typ := range typs {
+				if len(file) > 0 {
+					if _, after, ok := strings.Cut(file, "/Library/Caches/com.apple.xbs/"); ok {
+						log.WithField("file", after).Info(viper.GetString("kernel.dwarf.type"))
+					} else {
+						log.WithField("file", file).Info(viper.GetString("kernel.dwarf.type"))
+					}
 				}
+				fmt.Println(utils.ClangFormat(typ, viper.GetString("kernel.dwarf.type")+".h", viper.GetBool("color") && !viper.GetBool("no-color")))
 			}
-			fmt.Println(utils.ClangFormat(typstr, viper.GetString("kernel.dwarf.type")+".h", viper.GetBool("color") && !viper.GetBool("no-color")))
 		}
 
 		if len(viper.GetString("kernel.dwarf.name")) > 0 {
-			n, file, err := dwarf.GetName(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.name"))
+			names, err := dwarf.GetName(filepath.Clean(args[0]), viper.GetString("kernel.dwarf.name"))
 			if err != nil {
 				return err
 			}
-			if len(file) > 0 {
-				if _, after, ok := strings.Cut(file, "/Library/Caches/com.apple.xbs/Sources/"); ok {
+			for file, n := range names {
+				if _, after, ok := strings.Cut(file, "/Library/Caches/com.apple.xbs/"); ok {
 					log.WithField("file", after).Info(viper.GetString("kernel.dwarf.name"))
 				} else {
 					log.WithField("file", file).Info(viper.GetString("kernel.dwarf.name"))
 				}
+				if n.Name == "" {
+					if strings.HasPrefix(n.LinkageName, "__Z") || strings.HasPrefix(n.LinkageName, "_Z") {
+						n.LinkageName = demangle.Do("_"+n.LinkageName, false, false)
+					}
+					fmt.Printf("%#x: %s", n.LowPC, utils.ClangFormat(n.LinkageName, viper.GetString("kernel.dwarf.name")+".h", viper.GetBool("color") && !viper.GetBool("no-color")))
+				} else {
+					fmt.Printf("%#x: %s", n.LowPC, utils.ClangFormat(n.String(), viper.GetString("kernel.dwarf.name")+".h", viper.GetBool("color") && !viper.GetBool("no-color")))
+				}
 			}
-			fmt.Printf("%#x: %s", n.LowPC, utils.ClangFormat(n.String(), viper.GetString("kernel.dwarf.name")+".h", viper.GetBool("color") && !viper.GetBool("no-color")))
 		}
 
 		if viper.GetBool("kernel.dwarf.all") {
-			dwarf.DumpAllTypes(filepath.Clean(args[0]), &dwarf.Config{
+			if err := dwarf.DumpAllTypes(filepath.Clean(args[0]), &dwarf.Config{
 				Markdown:    viper.GetBool("kernel.dwarf.md"),
 				Color:       viper.GetBool("color") && !viper.GetBool("no-color"),
 				DiffTool:    viper.GetString("diff-tool"),
 				ShowOffsets: !noOffsets,
-			})
+			}); err != nil {
+				return fmt.Errorf("failed to dump all: %v", err)
+			}
 		}
 		if viper.GetBool("kernel.dwarf.structs") {
-			dwarf.DumpAllStructs(filepath.Clean(args[0]), &dwarf.Config{
+			if err := dwarf.DumpAllStructs(filepath.Clean(args[0]), &dwarf.Config{
 				Markdown:    viper.GetBool("kernel.dwarf.md"),
 				Color:       viper.GetBool("color") && !viper.GetBool("no-color"),
 				DiffTool:    viper.GetString("diff-tool"),
 				ShowOffsets: !noOffsets,
-			})
+			}); err != nil {
+				return fmt.Errorf("failed to dump structs: %v", err)
+			}
 		}
 		if viper.GetBool("kernel.dwarf.enums") {
-			dwarf.DumpAllEnums(filepath.Clean(args[0]), &dwarf.Config{
+			if err := dwarf.DumpAllEnums(filepath.Clean(args[0]), &dwarf.Config{
 				Markdown:    viper.GetBool("kernel.dwarf.md"),
 				Color:       viper.GetBool("color") && !viper.GetBool("no-color"),
 				DiffTool:    viper.GetString("diff-tool"),
 				ShowOffsets: !noOffsets,
-			})
+			}); err != nil {
+				return fmt.Errorf("failed to dump enums: %v", err)
+			}
 		}
 
 		return nil

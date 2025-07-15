@@ -19,7 +19,7 @@ type Ipsw struct {
 	ID         string             `gorm:"primaryKey" json:"id"`
 	Name       string             `json:"name,omitempty"`
 	Version    string             `json:"version,omitempty"`
-	BuildID    string             `json:"buildid,omitempty"`
+	BuildID    string             `gorm:"column:buildid" json:"buildid,omitempty"`
 	Devices    []*Device          `gorm:"many2many:ipsw_devices;" json:"devices,omitempty"`
 	Kernels    []*Kernelcache     `gorm:"many2many:ipsw_kernels;" json:"kernels,omitempty"`
 	DSCs       []*DyldSharedCache `gorm:"many2many:ipsw_dscs;" json:"dscs,omitempty"`
@@ -37,9 +37,9 @@ type Device struct {
 // Kernelcache is the model for a kernelcache.
 type Kernelcache struct {
 	UUID      string         `gorm:"primaryKey" json:"uuid"`
-	CreatedAt time.Time      `json:"created_at,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at"`
 
 	Version string   `json:"version,omitempty"`
 	Kexts   []*Macho `gorm:"many2many:kernelcache_kexts;" json:"kexts,omitempty"`
@@ -58,8 +58,8 @@ type DyldSharedCache struct {
 
 type Path struct {
 	// swagger:ignore
-	ID   uint   `gorm:"primaryKey"`
-	Path string `gorm:"uniqueIndex" json:"name,omitempty"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	Path string `gorm:"uniqueIndex;not null" json:"path"`
 }
 
 type Macho struct {

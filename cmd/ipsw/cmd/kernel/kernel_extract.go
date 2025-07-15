@@ -26,9 +26,9 @@ import (
 	"path/filepath"
 
 	"github.com/apex/log"
-	"github.com/blacktop/go-macho"
 	"github.com/blacktop/go-macho/pkg/fixupchains"
 	"github.com/blacktop/go-macho/types"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/blacktop/ipsw/internal/magic"
 	"github.com/blacktop/ipsw/internal/utils"
 	"github.com/fatih/color"
@@ -41,9 +41,11 @@ func init() {
 
 	kerExtractCmd.Flags().BoolP("all", "a", false, "Extract all KEXTs")
 	kerExtractCmd.Flags().String("output", "", "Directory to extract KEXTs to")
+	kerExtractCmd.Flags().StringP("arch", "e", "", "Which architecture to use for fat/universal MachO")
 
 	viper.BindPFlag("kernel.extract.all", kerExtractCmd.Flags().Lookup("all"))
 	viper.BindPFlag("kernel.extract.output", kerExtractCmd.Flags().Lookup("output"))
+	viper.BindPFlag("kernel.extract.arch", kerExtractCmd.Flags().Lookup("arch"))
 }
 
 // kerExtractCmd represents the kerExtract command
@@ -63,6 +65,7 @@ var kerExtractCmd = &cobra.Command{
 
 		dumpAll := viper.GetBool("kernel.extract.all")
 		extractPath := viper.GetString("kernel.extract.output")
+		selectedArch := viper.GetString("kernel.extract.arch")
 
 		if len(args) == 1 && !dumpAll {
 			return fmt.Errorf("you must specify a KEXT to extract OR use the --all flag")
@@ -71,7 +74,7 @@ var kerExtractCmd = &cobra.Command{
 		kernPath := filepath.Clean(args[0])
 
 		if ok, err := magic.IsMachoOrImg4(kernPath); !ok {
-			return fmt.Errorf(err.Error())
+			return fmt.Errorf("invalid file format: %v", err)
 		}
 
 		folder := filepath.Dir(kernPath)
@@ -79,29 +82,30 @@ var kerExtractCmd = &cobra.Command{
 			folder = extractPath
 		}
 
-		m, err := macho.Open(kernPath)
+		m, err := mcmd.OpenMachO(kernPath, selectedArch)
 		if err != nil {
 			return fmt.Errorf("failed to open kernelcache: %v", err)
 		}
+		defer m.Close()
 
-		if m.FileTOC.FileHeader.Type != types.MH_FILESET {
+		if m.File.FileTOC.FileHeader.Type != types.MH_FILESET {
 			return fmt.Errorf("kernelcache type is not MH_FILESET (KEXT-xtraction not supported yet)")
 		}
 
 		var dcf *fixupchains.DyldChainedFixups
-		if m.HasFixups() {
-			dcf, err = m.DyldChainedFixups()
+		if m.File.HasFixups() {
+			dcf, err = m.File.DyldChainedFixups()
 			if err != nil {
 				return fmt.Errorf("failed to parse fixups from in memory MachO: %v", err)
 			}
 		}
 
-		baseAddress := m.GetBaseAddress()
+		baseAddress := m.File.GetBaseAddress()
 
 		if dumpAll {
 			log.Info("Extracting all KEXTs...")
-			for _, fse := range m.FileSets() {
-				mfse, err := m.GetFileSetFileByName(fse.EntryID)
+			for _, fse := range m.File.FileSets() {
+				mfse, err := m.File.GetFileSetFileByName(fse.EntryID)
 				if err != nil {
 					return fmt.Errorf("failed to parse KEXT %s: %v", fse.EntryID, err)
 				}
@@ -111,12 +115,12 @@ var kerExtractCmd = &cobra.Command{
 				utils.Indent(log.Info, 2)(fmt.Sprintf("Created %s", filepath.Join(folder, fse.EntryID)))
 			}
 		} else {
-			m, err = m.GetFileSetFileByName(args[1])
+			mfse, err := m.File.GetFileSetFileByName(args[1])
 			if err != nil {
 				return fmt.Errorf("failed to parse KEXT %s: %v", args[1], err)
 			}
 
-			if err := m.Export(filepath.Join(folder, args[1]), dcf, baseAddress, nil); err != nil { // TODO: do I want to add any extra syms?
+			if err := mfse.Export(filepath.Join(folder, args[1]), dcf, baseAddress, nil); err != nil { // TODO: do I want to add any extra syms?
 				return fmt.Errorf("failed to export KEXT %s; %v", args[1], err)
 			}
 			log.Infof("Created %s", filepath.Join(folder, args[1]))

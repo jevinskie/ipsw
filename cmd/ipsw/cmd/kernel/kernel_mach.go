@@ -29,7 +29,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/apex/log"
-	"github.com/blacktop/go-macho"
+	mcmd "github.com/blacktop/ipsw/internal/commands/macho"
 	"github.com/blacktop/ipsw/pkg/kernelcache"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -38,6 +38,7 @@ import (
 
 func init() {
 	KernelcacheCmd.AddCommand(kernelMachCmd)
+	kernelMachCmd.Flags().StringP("arch", "a", "", "Which architecture to use for fat/universal MachO")
 	kernelMachCmd.MarkZshCompPositionalArgumentFile(1, "kernelcache*")
 }
 
@@ -57,18 +58,19 @@ var kernelMachCmd = &cobra.Command{
 		color.NoColor = viper.GetBool("no-color")
 
 		machoPath := filepath.Clean(args[0])
+		selectedArch, _ := cmd.Flags().GetString("arch")
 
 		if strings.Contains(machoPath, "development") {
 			log.Warn("development kernelcache detected: 'MACH_ASSERT=1' so 'mach_trap_t' has an extra 'const char *mach_trap_name' field which will throw off the parsing of the mach_traps table")
 		}
 
-		m, err := macho.Open(machoPath)
+		m, err := mcmd.OpenMachO(machoPath, selectedArch)
 		if err != nil {
 			return err
 		}
 		defer m.Close()
 
-		machTraps, err := kernelcache.GetMachTrapTable(m)
+		machTraps, err := kernelcache.GetMachTrapTable(m.File)
 		if err != nil {
 			return err
 		}
